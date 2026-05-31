@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# ChromaDB / Vector stores (should not be versioned)
+chroma_db/
+chroma_db_*/
+
+# Data files (too large, generated)
+data/*.json
+
+# Backups
+safe_zone/
+*.bak
+
+# Environment
+.env
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
