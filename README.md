@@ -1,4 +1,4 @@
-# bib_agentic_rag
+# bib_rag
 
 Agentic RAG system for academic paper bibliography management.
 
