@@ -241,14 +241,12 @@ def synthesize_paragraph(analyzed: List[Dict], topic: str, style: str = "APA") -
         
         if i == 1:
             # First sentence: introduce main finding
-            if 'repulsion' in key_terms and 'adhesion' in key_terms:
-                sentences.append(f"{cite_inline} ({year}) demonstrated that Eph receptor–ephrin signaling drives cell segregation through a combination of heterotypic repulsion and modulation of cadherin-mediated adhesion.")
-            elif 'repulsion' in key_terms:
+            if 'repulsion' in key_terms:
                 sentences.append(f"{cite_inline} ({year}) demonstrated that Eph receptor–ephrin signaling drives cell segregation primarily through heterotypic repulsion mechanisms.")
             elif 'tension' in key_terms:
                 sentences.append(f"{cite_inline} ({year}) showed that cortical tension differences underlie Eph-mediated boundary formation.")
             elif 'cadherin' in key_terms:
-                sentences.append(f"{cite_inline} ({year}) revealed that N-cadherin plays a critical role in Eph-mediated cell segregation by suppressing homotypic repulsion.")
+                sentences.append(f"{cite_inline} ({year}) revealed that cadherin plays a critical role in Eph-mediated cell segregation by suppressing homotypic repulsion.")
             else:
                 sentences.append(f"{cite_inline} ({year}) investigated Eph receptor–ephrin signaling in cell segregation and border formation.")
         elif i == 2:
