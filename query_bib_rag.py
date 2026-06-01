@@ -151,7 +151,7 @@ def cite_mode(claim: str, top_k: int = 5):
 
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 1:
         print("""
 📚 bib_rag Query Tool
 Usage:

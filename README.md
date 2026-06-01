@@ -20,17 +20,42 @@ nohup ~/.local/bin/llama-server \
   > /tmp/llama-bge-m3.log 2>&1 &
 ```
 
-### 2. Query the knowledge base
+## Usage
 
 ```bash
 cd /Disk_bot/Eph/bib_rag
 
-# Simple search
-python3 query_bib_rag.py "cis interaction mechanism"
+# Quick search
+python3 -B query_bib_rag.py "cis interaction mechanism"
 
 # Find citations for a claim
-python3 query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
+python3 -B query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
+
+# Write a paragraph with citations (uses -B to ensure fresh code)
+python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation" --top 5 --style APA --output /path/to/output.odt
+
+# Insert bibliography from inline citations in .odt
+python3 -B bib_rag_zotero_odt_proper.py /path/to/file.odt APA
 ```
+
+### Writing a Paragraph
+
+```bash
+python3 -B bib_rag_writer.py "your topic sentence" [--top N] [--style APA|Vancouver|Nature] [--output path.odt]
+```
+
+Example:
+```bash
+python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation through repulsion" \
+  --top 5 --style APA --output /Disk_bot/writing/synthesis_eph.odt
+```
+
+This will:
+1. Search bib_rag for relevant passages
+2. Analyze key claims and terms
+3. Synthesize a paragraph with proper in-text citations
+4. Add formatted references at the end
+5. Save to .odt
 
 ### 3. Add new papers (incremental)
 
