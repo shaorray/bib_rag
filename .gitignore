@@ -25,3 +25,5 @@ safe_zone/
 .idea/
 *.swp
 *.swo
+
+archive/

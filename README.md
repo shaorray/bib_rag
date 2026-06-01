@@ -1,55 +1,72 @@
-# bib_agentic_rag
+# bib_rag
 
-Agentic RAG system for academic paper bibliography management.
+Academic bibliography RAG system for evidence-based writing.
 
-## Features
+## Status
 
-- **Incremental paper addition**: Add papers to ChromaDB without rebuilding
-- **bge-m3 embeddings**: 1024-dim multilingual embeddings via local server
-- **Smart chunking**: Paragraph-level, skips reference sections
-- **Section-aware**: Extracts Abstract, Introduction, Methods, Results, Discussion, Conclusion
-- **Duplicate detection**: Content-hash based, auto-skips unchanged papers
-- **Batch processing**: 100 papers/batch with automatic persist
+- **1,643 papers** indexed
+- **18,239 chunks** embedded (paragraph-level)
+- **Model**: bge-m3 (1024-dim, GPU via llama-server port 8081)
 
-## Architecture
+## Quick Start
 
-```
-papers_dir/
-  ├── md/              # pymupdf4llm extracted markdown
-  └── ...
-
-bib_agentic_rag/
-  ├── src/
-  │   └── incremental_add_papers.py   # Main builder
-  ├── data/
-  │   └── incremental_metadata.json   # Paper registry
-  └── chroma_db_new/                  # ChromaDB vector store
-```
-
-## Requirements
-
-- Python 3.10+
-- ChromaDB
-- LangChain
-- bge-m3 embedding server (port 11435)
-
-## Usage
+### 1. Start embedding server
 
 ```bash
-# 1. Start bge-m3 server
-python3 /home/rui/.openclaw/agents/local-embedding/local_embedding_server.py \
-  --port 11435 --model /Disk_bot/models/bge-m3
-
-# 2. Dry run (preview)
-cd src
-python3 incremental_add_papers.py /Disk_bot/paper_lib/md --dry-run
-
-# 3. Actual build
-python3 incremental_add_papers.py /Disk_bot/paper_lib/md
-
-# 4. Add more papers later (incremental)
-python3 incremental_add_papers.py /Disk_bot/paper_lib/md/signaling
+# llama-server bge-m3 must be running on port 8081
+nohup ~/.local/bin/llama-server \
+  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
+  --port 8081 -c 8192 --embedding -ngl 999 \
+  > /tmp/llama-bge-m3.log 2>&1 &
 ```
+
+### 2. Query the knowledge base
+
+```bash
+cd /Disk_bot/Eph/bib_rag
+
+# Simple search
+python3 query_bib_rag.py "cis interaction mechanism"
+
+# Find citations for a claim
+python3 query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
+```
+
+### 3. Add new papers (incremental)
+
+```bash
+cd src
+
+# CPU fallback (slow but reliable)
+python3 build_stable.py /path/to/new_papers -b 50
+
+# GPU build (requires llama-server on 8081)
+python3 build_gpu.py /path/to/new_papers -b 50
+```
+
+## File Structure
+
+```
+bib_rag/
+├── chroma_db_new/          ← Working vector database (701MB, 18,239 chunks)
+├── data/
+│   ├── build_checkpoint.json      ← Resume point (empty after completion)
+│   └── incremental_metadata.json  ← Paper registry (16,460 entries)
+├── src/
+│   ├── build_gpu.py        ← GPU build script (current, uses llama-server bge-m3)
+│   ├── build_stable.py     ← CPU fallback build (sentence-transformers)
+│   └── requirements.txt   ← Python deps
+├── query_bib_rag.py        ← Quick query interface
+├── README.md               ← This file
+└── archive/                ← Obsolete scripts (safe to ignore)
+```
+
+## Writing Workflow
+
+1. **Draft a claim**: Write your assertion
+2. **Find evidence**: `python3 query_bib_rag.py --cite "your claim"`
+3. **Verify**: Check the returned DOI + excerpt
+4. **Cite**: Add to your paper's reference list
 
 ## License
 
