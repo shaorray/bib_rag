@@ -1,0 +1,66 @@
+"""
+Routing logic for the bib_rag agentic graph.
+
+Provides edge routing functions for both the main graph and the agent subgraph.
+Adapted from the reference implementation for bib_rag's ChromaDB + llama-server setup.
+"""
+
+from typing import Literal
+from langgraph.types import Send
+
+from .agent_schemas import State, AgentState
+from .agent_nodes import MAX_ITERATIONS, MAX_TOOL_CALLS
+
+
+def route_after_rewrite(state: State) -> list:
+    """Route after query rewriting.
+
+    If the question is unclear, route to request_clarification (the graph
+    will interrupt before this node so the user can respond).
+    If clear, spawn agent subgraphs for each rewritten query.
+
+    Args:
+        state: Current State (main graph)
+
+    Returns:
+        Either "request_clarification" or a list of Send() calls for parallel agents.
+    """
+    if not state.get("questionIsClear", False):
+        return "request_clarification"
+    else:
+        return [
+            Send(
+                "agent",
+                {"question": query, "question_index": idx, "messages": []},
+            )
+            for idx, query in enumerate(state["rewrittenQuestions"])
+        ]
+
+
+def route_after_orchestrator_call(state: AgentState) -> Literal["tools", "fallback_response", "collect_answer"]:
+    """Route after the orchestrator makes a tool call decision.
+
+    Routing logic:
+    - If max iterations or max tool calls reached → fallback_response
+    - If last AI message has no tool calls → collect_answer
+    - Otherwise → tools (execute tool calls)
+
+    Args:
+        state: Current AgentState
+
+    Returns:
+        One of "tools", "fallback_response", or "collect_answer".
+    """
+    iteration = state.get("iteration_count", 0)
+    tool_count = state.get("tool_call_count", 0)
+
+    if iteration >= MAX_ITERATIONS or tool_count > MAX_TOOL_CALLS:
+        return "fallback_response"
+
+    last_message = state["messages"][-1]
+    tool_calls = getattr(last_message, "tool_calls", None) or []
+
+    if not tool_calls:
+        return "collect_answer"
+
+    return "tools"

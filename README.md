@@ -2,96 +2,196 @@
 
 Academic bibliography RAG system for evidence-based writing.
 
-## Status
+## What's New: Agentic RAG (v2.0)
 
-- **1,643 papers** indexed
-- **18,239 chunks** embedded (paragraph-level)
-- **Model**: bge-m3 (1024-dim, GPU via llama-server port 8081)
+Full LangGraph-powered agentic pipeline with hierarchical retrieval, context compression, and conversation memory.
 
-## Quick Start
-
-### 1. Start embedding server
-
-```bash
-# llama-server bge-m3 must be running on port 8081
-nohup ~/.local/bin/llama-server \
-  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
-  --port 8081 -c 8192 --embedding -ngl 999 \
-  > /tmp/llama-bge-m3.log 2>&1 &
-```
-
-## Usage
+### Quick Start — Agentic Query
 
 ```bash
 cd /Disk_bot/Eph/bib_rag
 
-# Quick search
+# Single query
+python3 -B agentic_query.py "What is the role of Eph receptors in neural development?"
+
+# Interactive chat mode
+python3 -B agentic_query.py --interactive
+
+# Verbose mode (shows pipeline progress)
+python3 -B agentic_query.py "Compare EphA and EphB functions" --verbose
+```
+
+**Prerequisites**: Both servers must be running
+- LLM: Qwen3.6-35B on port 5015
+- Embeddings: bge-m3 on port 8081
+
+### Architecture
+
+```
+User Query
+  ↓
+summarize_history → rewrite_query → [clarification?]
+  ↓
+Agent Subgraphs (parallel for multi-part queries)
+  orchestrator → search_child_chunks → retrieve_parent_chunks → [compress?]
+  ↓
+aggregate_answers → Final Answer with Sources
+```
+
+**Key features:**
+- **Hierarchical retrieval**: Search small child chunks → retrieve full parent context
+- **Context compression**: LLM summarizes retrieved data when token threshold exceeded
+- **Map-Reduce**: Multi-part queries split into parallel agents
+- **Conversation memory**: Follow-up queries resolved from prior context
+- **Source attribution**: Every answer cites specific papers
+
+---
+
+## Classic RAG Tools (Still Available)
+
+### Quick Search
+```bash
 python3 -B query_bib_rag.py "cis interaction mechanism"
+```
 
-# Find citations for a claim
+### Find Citations
+```bash
 python3 -B query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
-
-# Write a paragraph with citations (uses -B to ensure fresh code)
-python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation" --top 5 --style APA --output /path/to/output.odt
-
-# Insert bibliography from inline citations in .odt
-python3 -B bib_rag_zotero_odt_proper.py /path/to/file.odt APA
 ```
 
-### Writing a Paragraph
-
+### Write Paragraph with Citations
 ```bash
-python3 -B bib_rag_writer.py "your topic sentence" [--top N] [--style APA|Vancouver|Nature] [--output path.odt]
+python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation" \
+  --top 5 --style APA --output /path/to/output.odt
 ```
 
-Example:
+---
+
+## Adding New Papers
+
+Put new PDFs in `/Disk_bot/paper_lib/My Library/pdf/` and run:
+
 ```bash
-python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation through repulsion" \
-  --top 5 --style APA --output /Disk_bot/writing/synthesis_eph.odt
+cd /Disk_bot/Eph/bib_rag
+python3 -B add_papers.py /path/to/new/pdfs/
 ```
 
 This will:
-1. Search bib_rag for relevant passages
-2. Analyze key claims and terms
-3. Synthesize a paragraph with proper in-text citations
-4. Add formatted references at the end
-5. Save to .odt
+1. Extract PDFs to Markdown (pymupdf4llm)
+2. Copy PDFs to the library
+3. Run hierarchical build to index new papers
+4. Resume from checkpoint automatically
 
-### 3. Add new papers (incremental)
-
+**Options:**
 ```bash
-cd src
-
-# CPU fallback (slow but reliable)
-python3 build_stable.py /path/to/new_papers -b 50
-
-# GPU build (requires llama-server on 8081)
-python3 build_gpu.py /path/to/new_papers -b 50
+python3 -B add_papers.py /path/to/pdfs/ --skip-extract   # if already markdown
+python3 -B add_papers.py /path/to/pdfs/ --batch-size 5   # smaller batches
 ```
+
+**Paper Library Structure:**
+```
+/Disk_bot/paper_lib/My Library/
+├── pdf/       ← Drop new PDFs here (or use add_papers.py)
+├── md/        ← Extracted markdown (auto-generated)
+└── md_opendataloader/  ← Alternative extraction (not indexed)
+```
+
+**Prerequisite:** Embedding server must be running on port 8081.
+
+---
+
+## System Status
+
+| Component | Count | Notes |
+|-----------|-------|-------|
+| Papers indexed | 1,643 | Full hierarchical build |
+| Parent chunks | 3,248 | Section-level context in `parent_store/` |
+| Child embeddings | 312,173 | 500 chars, 100 overlap in ChromaDB |
+| Embedding model | bge-m3 | 1024-dim, GPU via llama-server port 8081 |
+| LLM | Qwen3.6-35B | 48GB RTX 4090, llama-server port 5015 |
+
+---
 
 ## File Structure
 
 ```
 bib_rag/
-├── chroma_db_new/          ← Working vector database (701MB, 18,239 chunks)
-├── data/
-│   ├── build_checkpoint.json      ← Resume point (empty after completion)
-│   └── incremental_metadata.json  ← Paper registry (16,460 entries)
+├── add_papers.py              ← Add new PDFs to index
+├── agentic_query.py           ← Query the agentic RAG system
+│
 ├── src/
-│   ├── build_gpu.py        ← GPU build script (current, uses llama-server bge-m3)
-│   ├── build_stable.py     ← CPU fallback build (sentence-transformers)
-│   └── requirements.txt   ← Python deps
-├── query_bib_rag.py        ← Quick query interface
-├── README.md               ← This file
-└── archive/                ← Obsolete scripts (safe to ignore)
+│   ├── build_hierarchical_gpu.py  ← GPU build script
+│   ├── build_hierarchical.py     ← CPU build fallback
+│   ├── query_bib_rag.py           ← Quick semantic search
+│   ├── bib_rag_writer.py          ← Paragraph synthesis with citations
+│   ├── bib_rag_writer_debate.py   ← LLM debate synthesis
+│   ├── agentic_graph.py           ← Main LangGraph workflow
+│   ├── agent_nodes.py             ← 9 agent node functions
+│   ├── agent_edges.py             ← Routing logic
+│   ├── agent_prompts.py           ← System prompts
+│   ├── agent_schemas.py           ← State definitions
+│   ├── agent_tools.py             ← Hierarchical search/retrieve tools
+│   ├── parent_store_manager.py    ← JSON parent chunk loader
+│   ├── evaluate.py                ← Agentic vs baseline evaluation
+│   └── test_comprehensive.py      ← 5-test suite
+│
+├── chroma_db_new/               ← Vector database (ChromaDB)
+├── parent_store/                ← Parent chunks (JSON)
+└── data/
+    ├── build_hierarchical_checkpoint.json
+    └── incremental_metadata.json
 ```
 
-## Writing Workflow
+---
 
-1. **Draft a claim**: Write your assertion
-2. **Find evidence**: `python3 query_bib_rag.py --cite "your claim"`
-3. **Verify**: Check the returned DOI + excerpt
-4. **Cite**: Add to your paper's reference list
+## Server Setup
+
+```bash
+# Start embedding server (bge-m3)
+bash /Disk_bot/start_llama_bge_m3.sh
+
+# Start LLM server (Qwen3.6-35B)
+bash /Disk_bot/llama-server_run.sh
+
+# Both should respond:
+curl http://localhost:8081/health   # embeddings
+curl http://localhost:5015/health   # LLM
+```
+
+---
+
+## Build Index (First Time)
+
+```bash
+cd /Disk_bot/Eph/bib_rag
+
+# GPU build (recommended)
+python3 -B build_hierarchical_gpu.py --rebuild --batch-size 10
+
+# Resume interrupted build
+python3 -B build_hierarchical_gpu.py --batch-size 10
+
+# CPU fallback (slower)
+python3 -B build_hierarchical.py
+```
+
+---
+
+## Testing
+
+```bash
+# Comprehensive test suite (5 queries, ~5 minutes)
+cd /Disk_bot/Eph/bib_rag
+python3 -B src/test_comprehensive.py
+
+# Single test query
+python3 -B src/test_agentic_graph.py
+
+# Evaluation: agentic vs baseline
+python3 -B src/evaluate.py
+```
+
+---
 
 ## License
 

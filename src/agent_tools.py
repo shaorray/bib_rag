@@ -177,11 +177,38 @@ class ToolFactory:
             return f"PARENT_RETRIEVAL_ERROR: {str(e)}"
 
 
-def create_tools(collection=None) -> List:
-    """
-    Create LangChain-compatible tools for agent use.
+from langchain_core.tools import tool
+
+def create_tools(collection=None):
+    """Create LangChain-compatible tools for agent use.
     
-    Returns list of tool dicts with name, description, and callable.
+    Returns list of @tool-decorated functions for ToolNode.
+    """
+    factory = ToolFactory(collection)
+    
+    @tool
+    def search_child_chunks(query: str, limit: int = 5) -> str:
+        """Search for relevant small child chunks in the document database. Returns excerpts with parent IDs for full context retrieval."""
+        return factory.search_child_chunks(query, limit)
+    
+    @tool
+    def retrieve_parent_chunks(parent_id: str) -> str:
+        """Retrieve full parent chunk by parent_id. Use after search_child_chunks to get complete context."""
+        return factory.retrieve_parent_chunks(parent_id)
+    
+    @tool
+    def retrieve_many_parents(parent_ids: list) -> str:
+        """Retrieve multiple parent chunks at once by their IDs."""
+        return factory.retrieve_many_parents(parent_ids)
+    
+    return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents]
+
+
+def create_tools_legacy(collection=None) -> List:
+    """
+    Legacy: Create tool dicts with name, description, and callable.
+    
+    Returns list of tool dicts for non-LangGraph use.
     """
     factory = ToolFactory(collection)
     
