@@ -9,7 +9,7 @@ Full LangGraph-powered agentic pipeline with hierarchical retrieval, context com
 ### Quick Start — Agentic Query
 
 ```bash
-cd /Disk_bot/Eph/bib_rag
+cd bib_rag
 
 # Single query
 python3 -B agentic_query.py "What is the role of Eph receptors in neural development?"
@@ -51,17 +51,17 @@ aggregate_answers → Final Answer with Sources
 
 ### Quick Search
 ```bash
-python3 -B query_bib_rag.py "cis interaction mechanism"
+python3 -B src/query_bib_rag.py "cis interaction mechanism"
 ```
 
 ### Find Citations
 ```bash
-python3 -B query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
+python3 -B src/query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
 ```
 
 ### Write Paragraph with Citations
 ```bash
-python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation" \
+python3 -B src/bib_rag_writer.py "Eph receptor signaling regulates cell segregation" \
   --top 5 --style APA --output /path/to/output.odt
 ```
 
@@ -69,10 +69,10 @@ python3 -B bib_rag_writer.py "Eph receptor signaling regulates cell segregation"
 
 ## Adding New Papers
 
-Put new PDFs in `/Disk_bot/paper_lib/My Library/pdf/` and run:
+Put new PDFs in your paper library and run:
 
 ```bash
-cd /Disk_bot/Eph/bib_rag
+cd bib_rag
 python3 -B add_papers.py /path/to/new/pdfs/
 ```
 
@@ -88,27 +88,7 @@ python3 -B add_papers.py /path/to/pdfs/ --skip-extract   # if already markdown
 python3 -B add_papers.py /path/to/pdfs/ --batch-size 5   # smaller batches
 ```
 
-**Paper Library Structure:**
-```
-/Disk_bot/paper_lib/My Library/
-├── pdf/       ← Drop new PDFs here (or use add_papers.py)
-├── md/        ← Extracted markdown (auto-generated)
-└── md_opendataloader/  ← Alternative extraction (not indexed)
-```
-
 **Prerequisite:** Embedding server must be running on port 8081.
-
----
-
-## System Status
-
-| Component | Count | Notes |
-|-----------|-------|-------|
-| Papers indexed | 1,643 | Full hierarchical build |
-| Parent chunks | 3,248 | Section-level context in `parent_store/` |
-| Child embeddings | 312,173 | 500 chars, 100 overlap in ChromaDB |
-| Embedding model | bge-m3 | 1024-dim, GPU via llama-server port 8081 |
-| LLM | Qwen3.6-35B | 48GB RTX 4090, llama-server port 5015 |
 
 ---
 
@@ -148,10 +128,10 @@ bib_rag/
 
 ```bash
 # Start embedding server (bge-m3)
-bash /Disk_bot/start_llama_bge_m3.sh
+bash start_llama_bge_m3.sh
 
-# Start LLM server (Qwen3.6-35B)
-bash /Disk_bot/llama-server_run.sh
+# Start LLM server
+bash llama-server_run.sh
 
 # Both should respond:
 curl http://localhost:8081/health   # embeddings
@@ -163,16 +143,16 @@ curl http://localhost:5015/health   # LLM
 ## Build Index (First Time)
 
 ```bash
-cd /Disk_bot/Eph/bib_rag
+cd bib_rag
 
 # GPU build (recommended)
-python3 -B build_hierarchical_gpu.py --rebuild --batch-size 10
+python3 -B src/build_hierarchical_gpu.py --rebuild --batch-size 10
 
 # Resume interrupted build
-python3 -B build_hierarchical_gpu.py --batch-size 10
+python3 -B src/build_hierarchical_gpu.py --batch-size 10
 
 # CPU fallback (slower)
-python3 -B build_hierarchical.py
+python3 -B src/build_hierarchical.py
 ```
 
 ---
@@ -181,7 +161,7 @@ python3 -B build_hierarchical.py
 
 ```bash
 # Comprehensive test suite (5 queries, ~5 minutes)
-cd /Disk_bot/Eph/bib_rag
+cd bib_rag
 python3 -B src/test_comprehensive.py
 
 # Single test query
