@@ -85,3 +85,8 @@ class AgentState(MessagesState):
     agent_answers: List[dict] = []
     tool_call_count: Annotated[int, operator.add] = 0
     iteration_count: Annotated[int, operator.add] = 0
+    # Tracks whether the orchestrator's mandatory first search has already been
+    # performed. Critical: `compress_context` wipes `messages[1:]`, so we cannot
+    # use "is messages empty?" as a proxy for "is this the first call" — that
+    # branch would re-fire `force_search` and waste a retrieval on every resume.
+    force_search_done: Annotated[bool, operator.or_] = False

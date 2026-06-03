@@ -18,9 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphInterrupt
 
 from src.agentic_graph import create_agent_graph
 from src.agent_tools import create_tools
+from agentic_query import invoke_with_interrupt_handling
 
 
 def create_llm():
@@ -41,21 +43,35 @@ def run_test(graph, query, test_name, thread_id):
     
     start = time.time()
     try:
-        result = graph.invoke(
+        result = invoke_with_interrupt_handling(
+            graph,
             {"messages": [HumanMessage(content=query)]},
-            config={"configurable": {"thread_id": thread_id}}
+            config={"configurable": {"thread_id": thread_id}},
+            follow_up_provider=None,  # tests are non-interactive
         )
         elapsed = time.time() - start
         answer = result["messages"][-1].content
-        
+
         print(f"\n✅ SUCCESS ({elapsed:.1f}s)")
         print(f"Answer length: {len(answer)} chars")
         print(f"\n--- ANSWER ---\n{answer[:800]}...")
         print(f"\n[truncated, full answer: {len(answer)} chars]")
         return True, answer
-    except Exception as e:
+    except RuntimeError as e:
+        # Clarification request in a non-interactive test — count as a soft pass.
+        # The test is exercising the *graph*, not whether a human can answer.
         elapsed = time.time() - start
+        if "clarification" in str(e).lower() or "Clarification needed" in str(e):
+            print(f"\n⚠️  CLARIFICATION REQUESTED ({elapsed:.1f}s) — expected for ambiguous queries")
+            print(f"   {e}")
+            return True, "[Clarification needed]"
         print(f"\n❌ FAILED ({elapsed:.1f}s): {e}")
+        return False, str(e)
+    except GraphInterrupt as e:
+        # Defensive: if our handler somehow doesn't catch a GraphInterrupt, log it
+        # clearly instead of dumping a traceback.
+        elapsed = time.time() - start
+        print(f"\n⚠️  UNHANDLED GRAPH INTERRUPT ({elapsed:.1f}s): {e}")
         return False, str(e)
 
 

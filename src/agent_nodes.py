@@ -149,7 +149,7 @@ def orchestrator(state: AgentState, llm_with_tools):
         llm_with_tools: LLM with tools bound via bind_tools()
 
     Returns:
-        Dict with messages, tool_call_count, iteration_count.
+        Dict with messages, tool_call_count, iteration_count, force_search_done.
     """
     context_summary = state.get("context_summary", "").strip()
     sys_msg = SystemMessage(content=get_orchestrator_prompt())
@@ -160,7 +160,11 @@ def orchestrator(state: AgentState, llm_with_tools):
         else []
     )
 
-    if not state.get("messages"):
+    # Branch on `force_search_done` (not on `messages` emptiness) because
+    # `compress_context` removes messages[1:] and would otherwise trick us
+    # into re-firing the mandatory first search on every post-compression
+    # resume — wasting an LLM call and an embedding roundtrip.
+    if not state.get("force_search_done", False):
         human_msg = HumanMessage(content=state["question"])
         force_search = HumanMessage(
             content="YOU MUST CALL 'search_child_chunks' AS THE FIRST STEP TO ANSWER THIS QUESTION."
@@ -170,6 +174,7 @@ def orchestrator(state: AgentState, llm_with_tools):
             "messages": [human_msg, response],
             "tool_call_count": len(response.tool_calls or []),
             "iteration_count": 1,
+            "force_search_done": True,
         }
 
     response = llm_with_tools.invoke([sys_msg] + summary_injection + state["messages"])

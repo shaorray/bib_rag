@@ -85,19 +85,27 @@ def extract_new_pdfs(source_dir):
     return extracted
 
 
+# Centralized build script path — kept in sync with `src/build_hierarchical_gpu.py`
+# (the v2.0 work moved build scripts under `src/`).
+BUILD_SCRIPT_PATH = BIB_RAG_DIR / "src" / "build_hierarchical_gpu.py"
+
+
 def build_index(batch_size=10):
     """Run hierarchical build to index new markdown files."""
     print(f"\n🏗️  Building hierarchical index (batch_size={batch_size})...")
-    
-    build_script = BIB_RAG_DIR / "build_hierarchical_gpu.py"
-    
+
+    if not BUILD_SCRIPT_PATH.exists():
+        print(f"❌ Build script not found at: {BUILD_SCRIPT_PATH}")
+        print("   This is a packaging bug — please report.")
+        return False
+
     result = subprocess.run(
-        [sys.executable, "-B", str(build_script), "--batch-size", str(batch_size)],
+        [sys.executable, "-B", str(BUILD_SCRIPT_PATH), "--batch-size", str(batch_size)],
         cwd=str(BIB_RAG_DIR),
         capture_output=False,
         text=True
     )
-    
+
     return result.returncode == 0
 
 
