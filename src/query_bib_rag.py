@@ -4,11 +4,78 @@ bib_rag query tool - Simple semantic search for academic writing
 Uses llama-server bge-m3 (port 8081) + ChromaDB
 """
 
-import sys, requests, sqlite3, json
+import sys, requests, sqlite3, json, os
 from typing import List, Dict
 
 CHROMA_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new/chroma.sqlite3"
 EMBED_URL = "http://localhost:8081/v1/embeddings"
+PARENT_STORE_DIR_PRIMARY   = "/Disk_bot/Eph/bib_rag/parent_store"
+PARENT_STORE_DIR_DISABLED  = "/Disk_bot/Eph/bib_rag/parent_store_disabled"
+
+
+def _load_parent_with_fallback(parent_id: str):
+    """
+    Try parent_store/ first, then parent_store_disabled/.  Returns the parent
+    dict (with 'meta' inside) or None.  This makes 57 disabled papers (which
+    ChromaDB still references but parent_store no longer has) recoverable via
+    fallback.  See /home/rui/.openclaw/workspace/memory/2026-06-19.md S20+.
+    """
+    if not parent_id:
+        return None
+    try:
+        sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+        from parent_store_manager import ParentStoreManager
+    except Exception:
+        return None
+    for d in (PARENT_STORE_DIR_PRIMARY, PARENT_STORE_DIR_DISABLED):
+        if not os.path.isdir(d):
+            continue
+        pm = ParentStoreManager(store_dir=d)
+        p = pm.load_content(parent_id)
+        if p is not None:
+            return p
+    return None
+
+
+def enrich_metadata_with_parent_fallback(results: List[Dict]) -> List[Dict]:
+    """
+    For each ChromaDB result, look up the parent JSON in primary then disabled
+    store, and overlay any fresh meta fields (key, title, doi, etc.) onto the
+    chunk metadata.  This is what makes the post-2026-06-19 `meta.key` fill
+    visible to retrieval without rebuilding ChromaDB.
+    """
+    for r in results:
+        meta = r.get("metadata") or {}
+        pid = meta.get("parent_id") or ""
+        parent = _load_parent_with_fallback(pid)
+        if not parent:
+            continue
+        p_meta = parent.get("meta", {}) or {}
+        # Overlay: fresh parent fields win over stale ChromaDB metadata.
+        for k in ("key", "title", "authors", "year", "journal", "doi",
+                  "pmid", "pmcid", "source"):
+            v = p_meta.get(k)
+            if v:
+                meta[k] = v
+        # Annotate whether the chunk came from a disabled paper.
+        # The JSON file on disk is named via _safe_filename(source) (strips
+        # non-word chars), so we must use the same rule to check existence.
+        try:
+            from parent_store_manager import ParentStoreManager as _PSM
+            p_source = parent.get("source", "")
+            if p_source:
+                # strip .md if present, then apply _safe_filename, then add .json
+                if p_source.endswith(".md"):
+                    stem = p_source[:-3]
+                else:
+                    stem = p_source
+                safe_name = _PSM(store_dir=PARENT_STORE_DIR_PRIMARY)._safe_filename(stem)
+                primary_path = os.path.join(PARENT_STORE_DIR_PRIMARY, f"{safe_name}.json")
+                if not os.path.exists(primary_path):
+                    meta["_note"] = "paper_in_disabled_store"
+        except Exception:
+            pass
+    return results
 
 
 def embed_query(text: str) -> List[float]:
@@ -92,6 +159,8 @@ def native_chroma_search(query: str, embedding: List[float], top_k: int = 5):
             "metadata": docs["metadatas"][0][i],
             "distance": docs["distances"][0][i]
         })
+    # Overlay fresh parent_store meta (esp. meta.key) onto each chunk
+    results = enrich_metadata_with_parent_fallback(results)
     return results
 
 
@@ -111,11 +180,17 @@ def format_results(results: List[Dict], query: str):
         year = meta.get("year", "N/A")
         doi = meta.get("doi", "")
         section = meta.get("section", "")
+        art_key = meta.get("key", "") or ""
+        note = meta.get("_note", "") or ""
         
         print(f"[{i}] 📄 {title}")
         print(f"    Year: {year} | Section: {section} | Relevance: {sim:.3f}")
+        if art_key:
+            print(f"    🔑 @article{{{art_key},")
         if doi:
-            print(f"    DOI: {doi}")
+            print(f"    🔗 DOI: {doi}")
+        if note:
+            print(f"    ⚠️  {note}")
         
         # Show excerpt (first 300 chars)
         text = r["text"][:300].replace("\n", " ")
@@ -141,8 +216,14 @@ def cite_mode(claim: str, top_k: int = 5):
         
         print(f"[{i}] Supporting Evidence (relevance: {sim:.3f})")
         print(f"    📄 {meta.get('title', 'Unknown')[:60]} ({meta.get('year', 'N/A')})")
+        art_key = meta.get("key", "") or ""
+        if art_key:
+            print(f"    🔑 @article{{{art_key},")
         if meta.get('doi'):
             print(f"    🔗 DOI: {meta.get('doi')}")
+        note = meta.get('_note', '') or ''
+        if note:
+            print(f"    ⚠️  {note}")
         text = r["text"][:400].replace("\n", " ")
         print(f"    💬 \"{text}...\"")
         print()

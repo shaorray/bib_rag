@@ -1,9 +1,11 @@
 # Large generated files
 parent_store/
+parent_store_disabled/
 chroma_db_new/
 data/
 safe_zone/
 archive/
+outputs/
 
 # Python cache
 __pycache__/
