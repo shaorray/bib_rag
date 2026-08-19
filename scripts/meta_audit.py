@@ -40,9 +40,7 @@ import csv
 import json
 import logging
 import re
-import shutil
 import time
-import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -80,373 +78,18 @@ ZOTERO_MIN_INTERVAL = 0.1
 HTTP_TIMEOUT = 10
 ZOTERO_TIMEOUT = 3
 
-# Known fake-DOI patterns (from data/doi_health_report.md analysis)
-FAKE_DOI_PATTERNS = [
-    r"\(SICI\)",                  # Wiley URL truncation
-    r"^BibKey:",                  # placeholder leaked from front-matter injection
-    r"https?://",                 # URL-as-DOI
-    r"^doi:\s*10\.\S+[<>]",       # markdown pollution
-]
-
 log = logging.getLogger("meta_audit")
 
 
 # ---------------------------------------------------------------------------
-# Normalization helpers (reused from scripts/bib_to_parent_store.py conventions)
+# Shared helpers live in bib_utils.py (normalize, filename_to_key, bib parsing)
 # ---------------------------------------------------------------------------
 
-def normalize(s: str) -> str:
-    """NFKD + strip combining + lowercase + drop non-alphanumeric."""
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKD", s.lower())
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    s = re.sub(r"[^a-z0-9]+", "", s)
-    return s
-
-
-def normalize_doi(d: str) -> str:
-    """Strip URL prefix / punctuation from a DOI."""
-    if not d:
-        return ""
-    s = d.strip().lower()
-    s = re.sub(r"^https?://(dx\.)?doi\.org/", "", s)
-    s = re.sub(r"^doi:\s*", "", s)
-    s = s.rstrip("/.,;)")
-    return s
-
-
-def title_tokens(s: str) -> set:
-    """Tokenize a title for Jaccard: lowercase + keep alphanumeric tokens."""
-    if not s:
-        return set()
-    s = unicodedata.normalize("NFKD", s.lower())
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    tokens = re.findall(r"[a-z0-9]+", s)
-    # Drop very short noise tokens (a, an, the, of ...)
-    return {t for t in tokens if len(t) > 2}
-
-
-def jaccard(a: set, b: set) -> float:
-    if not a and not b:
-        return 1.0
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
-
-
-def strip_author_year_prefix(title: str) -> str:
-    """Strip `Lastname et al. - YEAR - ` or `Lastname - YEAR - ` prefix.
-
-    Mirrors scripts/bib_to_parent_store.py:normalize_paper_title.
-    """
-    if not title:
-        return ""
-    if title.startswith("http"):
-        return ""
-    m = re.match(r"^(.+?)\s+et\s+al\.?\s*-\s*(?:\d{4}\s*-\s*)?(.+)$", title)
-    if m:
-        return m.group(2).strip()
-    m = re.match(r"^[A-Za-z][A-Za-z0-9_-]+\s*-\s*(?:\d{4}\s*-\s*)?(.+)$", title)
-    if m:
-        return m.group(1).strip()
-    # Strip leading "YYYY - " (filename-as-title case)
-    m = re.match(r"^\d{4}\s*-\s*(.+)$", title)
-    if m:
-        return m.group(1).strip()
-    return title.strip()
-
-
-def filename_to_key(fname: str) -> Optional[Tuple[str, str, str]]:
-    """Parse parent_store filename → (lastname, year, title_prefix_norm).
-
-    Adapted from scripts/bib_to_parent_store.py:filename_to_key.
-    """
-    # Format 1: Lastname_et_al__-_<year>_<title>
-    m = re.match(r"([\w-]+?)_et_al__-?-?(\d{4})_(.+)", fname, re.UNICODE)
-    if m:
-        lastname = m.group(1).lower()
-        year = m.group(2)
-        title_part = m.group(3).replace("_md.json", "").replace("_md", "").replace("_", " ")
-        return (lastname, year, normalize(title_part[:50]))
-    # Format 2: Lastname_and_Lastname_<year>_<title> or Lastname_<year>_<title>
-    m = re.match(r"([\w-]+?)_(\d{4})_(.+)", fname, re.UNICODE)
-    if m:
-        lastname_raw = m.group(1)
-        if "and" not in lastname_raw.lower():
-            title_part = m.group(3).replace("_md.json", "").replace("_md", "").replace("_", " ")
-            return (lastname_raw.lower(), m.group(2), normalize(title_part[:50]))
-        first_author = lastname_raw.split("_and_")[0].lower()
-        if first_author and re.match(r"^[A-Za-z]", first_author):
-            title_part = m.group(3).replace("_md.json", "").replace("_md", "").replace("_", " ")
-            return (first_author, m.group(2), normalize(title_part[:50]))
-    # Format 3: Lastname_YYYY
-    m = re.match(r"([\w-]+?)_(\d{4})", fname, re.UNICODE)
-    if m:
-        return (m.group(1).lower(), m.group(2), "")
-    return None
-
-
-def extract_year_from_content(data: list) -> str:
-    """Fallback: extract publication year from paper content (first 2000 chars)."""
-    for sec in data:
-        c = sec.get("content", "")[:2000]
-        for m in re.finditer(
-            r"(?:©|Copyright|published|received|preprint|Cite this as)[\s\S]{0,40}?(19\d{2}|20[0-3]\d)",
-            c, re.IGNORECASE,
-        ):
-            return m.group(1)
-        m = re.search(r"10\.1101/(19\d{2}|20[0-3]\d)", c)
-        if m:
-            return m.group(1)
-    return ""
-
-
-def extract_abstract(data: list) -> str:
-    """Pull abstract-ish section from content (for disambiguation)."""
-    for sec in data:
-        c = sec.get("content", "")
-        m = re.search(
-            r"(?si)##\s*\*?\*?(?:Abstract|Summary|Background|Introduction|Research\s+briefing)[:\s]*\n*(.*?)(?=\n##\s|\Z)",
-            c,
-        )
-        if m:
-            cand = m.group(1).strip()
-            if len(cand) > 100:
-                return cand
-    return ""
-
-
-def is_fake_doi(doi: str) -> bool:
-    if not doi:
-        return False
-    for pat in FAKE_DOI_PATTERNS:
-        if re.search(pat, doi):
-            return True
-    return False
-
-
-# ---------------------------------------------------------------------------
-# BibParser — load .bib into doi_index + title_index
-# ---------------------------------------------------------------------------
-
-class BibEntry:
-    __slots__ = (
-        "key", "doi", "title", "author_first_lastname", "author_full",
-        "year", "abstract", "journal",
-        "title_norm", "author_norm", "abstract_norm",
-    )
-
-    def __init__(self, key, doi, title, author_first_lastname, author_full,
-                 year, abstract, journal):
-        self.key = key
-        self.doi = doi
-        self.title = title
-        self.author_first_lastname = author_first_lastname
-        self.author_full = author_full
-        self.year = year
-        self.abstract = abstract
-        self.journal = journal
-        self.title_norm = normalize(title[:50])
-        self.author_norm = normalize(author_first_lastname)
-        self.abstract_norm = normalize(abstract[:200])
-
-    def to_fix_payload(self) -> Dict[str, str]:
-        return {
-            "doi": self.doi,
-            "title": self.title,
-            "authors": self.author_full,
-            "year": self.year,
-            "journal": self.journal,
-            "key": self.key,
-        }
-
-
-def parse_bib_entries(bib_path: Path) -> List[BibEntry]:
-    """Parse BibTeX file into BibEntry list.
-
-    Reuses the balanced-brace approach from scripts/bib_to_parent_store.py:parse_bib_entries,
-    extended with journaltitle extraction.
-    """
-    content = bib_path.read_text(encoding="utf-8")
-    entries_raw = re.split(r"\n(?=@\w+\{)", content)
-    result: List[BibEntry] = []
-    for e in entries_raw:
-        m = re.match(r"^@(\w+)\{([^,]+),", e.strip())
-        if not m:
-            continue
-        key = m.group(2).strip()
-
-        def balanced_field(name):
-            fm = re.search(
-                r"\b" + re.escape(name) + r"\s*=\s*\{",
-                e, re.IGNORECASE,
-            )
-            if not fm:
-                fm = re.search(
-                    r"\b" + re.escape(name) + r"\s*=\s*\"",
-                    e, re.IGNORECASE,
-                )
-                if not fm:
-                    return ""
-                k = fm.end()
-                end = e.find('"', k)
-                return e[k:end] if end >= 0 else ""
-            k = fm.end()
-            depth = 1
-            j = k
-            buf = []
-            while j < len(e) and depth > 0:
-                c = e[j]
-                if c == "{":
-                    depth += 1
-                    buf.append(c)
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                    buf.append(c)
-                else:
-                    buf.append(c)
-                j += 1
-            inner = "".join(buf)
-            # Strip one layer of nested {X} braces (Zotero convention)
-            inner = re.sub(r"\{([^{}]*)\}", r"\1", inner)
-            return inner.strip()
-
-        doi = balanced_field("doi")
-        title = balanced_field("title")
-        author_str = balanced_field("author")
-        journal = balanced_field("journaltitle") or balanced_field("journal")
-
-        # year: prefer year field, then date field, then key
-        year = ""
-        m_year = re.search(r"^year\s*=\s*\{(\d{4})\}", e, re.MULTILINE)
-        if m_year:
-            year = m_year.group(1)
-        if not year:
-            m_date = re.search(r"^date\s*=\s*\{(\d{4})", e, re.MULTILINE)
-            if m_date:
-                year = m_date.group(1)
-        if not year:
-            m_key = re.search(r"(\d{4})", key)
-            if m_key:
-                year = m_key.group(1)
-
-        # authors
-        author_full = ""
-        author_first_lastname = ""
-        if author_str:
-            author_str_clean = re.sub(r"[{}]", "", author_str)
-            author_full = re.sub(r"\s+and\s+", ", ", author_str_clean).strip()
-            first = re.split(r"\s+and\s+", author_str_clean)[0]
-            if "," in first:
-                author_first_lastname = first.split(",")[0].strip()
-            else:
-                parts = first.split()
-                author_first_lastname = parts[-1] if parts else ""
-
-        abstract = balanced_field("abstract")
-
-        result.append(BibEntry(
-            key=key, doi=doi, title=title,
-            author_first_lastname=author_first_lastname,
-            author_full=author_full, year=year,
-            abstract=abstract, journal=journal,
-        ))
-    return result
-
-
-class BibIndex:
-    """Indexes over BibEntry list for fast lookup."""
-
-    def __init__(self, entries: List[BibEntry]):
-        self.entries = entries
-        self.doi_index: Dict[str, BibEntry] = {}
-        self.title_index: Dict[str, List[BibEntry]] = defaultdict(list)
-        self.lastname_year_index: Dict[Tuple[str, str], List[BibEntry]] = defaultdict(list)
-        for be in entries:
-            if be.doi:
-                nd = normalize_doi(be.doi)
-                if nd and nd not in self.doi_index:
-                    self.doi_index[nd] = be
-            if be.title_norm:
-                self.title_index[be.title_norm[:25]].append(be)
-            if be.author_first_lastname and be.year:
-                self.lastname_year_index[
-                    (normalize(be.author_first_lastname), be.year)
-                ].append(be)
-
-    def by_doi(self, doi: str) -> Optional[BibEntry]:
-        nd = normalize_doi(doi)
-        return self.doi_index.get(nd) if nd else None
-
-    def by_filename_key(self, fname_key: Tuple[str, str, str],
-                        paper_title_norm: str = "",
-                        paper_abstract_norm: str = "") -> Tuple[Optional[BibEntry], str]:
-        """Triple-match (lastname + year + title-prefix overlap).
-
-        Returns (entry, status) where status ∈ {matched, multi_match, no_match, no_year}.
-        """
-        lastname, year, title_norm = fname_key
-        if not year:
-            return None, "no_year"
-        candidates = [
-            be for be in self.lastname_year_index.get((lastname, year), [])
-            if be.doi and be.title_norm
-            and (
-                be.title_norm[:25] in title_norm
-                or title_norm[:25] in be.title_norm
-            )
-        ]
-        if not candidates:
-            return None, "no_match"
-        if len(candidates) == 1:
-            return candidates[0], "matched"
-        # multi_match: disambiguate by title+abstract overlap
-        def score(be):
-            s = len(set(be.title_norm[:25]) & set(title_norm[:25]))
-            if paper_abstract_norm and be.abstract_norm:
-                if (be.abstract_norm[:30] in paper_abstract_norm
-                        or paper_abstract_norm[:30] in be.abstract_norm):
-                    s += 10
-            return s
-        best = max(candidates, key=score)
-        return best, "multi_match"
-
-    def by_title(self, paper_title: str, paper_year: str = "",
-                 paper_abstract_norm: str = "") -> Tuple[Optional[BibEntry], str]:
-        """Reverse title search (no_match fallback)."""
-        if not paper_title or len(paper_title) < 15:
-            return None, "title_too_short"
-        paper_title_norm = normalize(paper_title[:80])
-        candidates = []
-        for be in self.entries:
-            if not be.doi or not be.title_norm:
-                continue
-            if paper_year and be.year:
-                try:
-                    if abs(int(paper_year) - int(be.year)) > YEAR_TOLERANCE_PASS:
-                        continue
-                except ValueError:
-                    if paper_year != be.year:
-                        continue
-            if (be.title_norm[:20] in paper_title_norm
-                    or paper_title_norm[:20] in be.title_norm):
-                candidates.append(be)
-        if not candidates:
-            return None, "no_match"
-        if len(candidates) == 1:
-            return candidates[0], "title_matched"
-        def score(be):
-            s = len(set(be.title_norm[:20]) & set(paper_title_norm[:20]))
-            if paper_abstract_norm and be.abstract_norm:
-                if (be.abstract_norm[:30] in paper_abstract_norm
-                        or paper_abstract_norm[:30] in be.abstract_norm):
-                    s += 10
-            return s
-        best = max(candidates, key=score)
-        return best, "multi_match"
+from bib_utils import (
+    BibIndex, extract_abstract, extract_year_from_content, filename_to_key,
+    is_doi_like, is_fake_doi, jaccard, normalize, normalize_doi,
+    parse_bib_entries, strip_author_year_prefix, title_tokens,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -929,6 +572,47 @@ class Auditor:
             except ValueError:
                 year_field_check = "bad_year"
 
+        # ---- Offline mode: verify against the .bib index instead ----
+        # When no external verifier is enabled, the local .bib is the ground
+        # truth: a paper whose claimed DOI/title/year match a bib entry passes.
+        offline_ref = None
+        if not self.crossref.enabled and not self.openalex.enabled:
+            if claimed["doi"] and not is_fake_doi(claimed["doi"]):
+                offline_ref = self.bib.by_doi(claimed["doi"])
+            if offline_ref is None and clean_title:
+                offline_ref, _st = self.bib.by_title(
+                    clean_title, claimed["year"] or "",
+                    paper_abstract_norm=paper_abstract_norm,
+                )
+            if offline_ref is not None:
+                bib_title = offline_ref.title or ""
+                bib_year = offline_ref.year or ""
+                bib_doi = normalize_doi(offline_ref.doi or "")
+                if claimed["doi"] and normalize_doi(claimed["doi"]) == bib_doi:
+                    doi_field_check = "match_bib"
+                elif claimed["doi"]:
+                    doi_field_check = "mismatch_bib"
+                else:
+                    doi_field_check = "missing"
+                claimed_title_tokens = title_tokens(clean_title or claimed["title"])
+                bib_title_tokens = title_tokens(bib_title)
+                sim = jaccard(claimed_title_tokens, bib_title_tokens)
+                if sim >= TITLE_JACCARD_PASS:
+                    title_field_check = "match_bib"
+                else:
+                    title_field_check = f"mismatch_bib(sim={sim:.2f})"
+                try:
+                    by = int(bib_year) if bib_year else None
+                    cy = int(claimed["year"]) if claimed["year"] else None
+                    if by is None or cy is None:
+                        year_field_check = "missing_year"
+                    elif abs(cy - by) <= YEAR_TOLERANCE_PASS:
+                        year_field_check = "match_bib"
+                    else:
+                        year_field_check = f"mismatch_bib(|{cy - by}|)"
+                except ValueError:
+                    year_field_check = "bad_year"
+
         field_checks = {
             "doi": doi_field_check,
             "title": title_field_check,
@@ -936,11 +620,13 @@ class Auditor:
         }
 
         # ---- Determine pass/fail ----
-        doi_ok = doi_field_check in ("resolves", "resolves_oa")
-        title_ok = title_field_check in ("match", "match_oa")
-        year_ok = year_field_check in ("match", "match_oa")
-        # If both external verifiers were offline and DOI missing → unverified
-        if (not self.crossref.enabled and not self.openalex.enabled
+        doi_ok = doi_field_check in ("resolves", "resolves_oa", "match_bib")
+        title_ok = title_field_check in ("match", "match_oa", "match_bib")
+        year_ok = year_field_check in ("match", "match_oa", "match_bib")
+        if offline_ref is not None:
+            # .bib is the ground truth in offline mode
+            status = "pass" if (doi_ok and title_ok and year_ok) else "fail"
+        elif (not self.crossref.enabled and not self.openalex.enabled
                 and not claimed["doi"]):
             status = "unverified"
         elif doi_ok and title_ok and year_ok:
@@ -1138,11 +824,25 @@ class Auditor:
         if not candidates:
             return None, "none", 0
 
-        # Pick the candidate with the most source agreements
-        # Count distinct sources agreeing on each DOI
-        doi_source_counts: Dict[str, int] = defaultdict(int)
+        # Pick the candidate with the most source agreements.
+        # Count DISTINCT source families agreeing on each DOI — crossref_verify
+        # and crossref_search are two queries to the same API, not two
+        # independent sources, so they must not double-count. Non-DOI fallback
+        # values (PMIDs, Zotero keys) do not count as DOI agreement.
+        SOURCE_FAMILY = {
+            "bib": "bib",
+            "crossref_verify": "crossref", "crossref_search": "crossref",
+            "pubmed": "pubmed", "pubmed_pmid": "pubmed",
+            "zotero": "zotero", "zotero_key": "zotero",
+            "openalex_verify": "openalex",
+        }
+        family_dois: Dict[str, set] = defaultdict(set)
         for src, nd in source_dois.items():
-            if nd:
+            if nd and is_doi_like(nd):
+                family_dois[SOURCE_FAMILY.get(src, src)].add(nd)
+        doi_source_counts: Dict[str, int] = defaultdict(int)
+        for fam, dois in family_dois.items():
+            for nd in dois:
                 doi_source_counts[nd] += 1
         if not doi_source_counts:
             # No DOI agreement — pick first candidate by insertion order
@@ -1270,7 +970,8 @@ class Reporter:
             fc = r.get("field_checks", {})
             for k in field_fail:
                 v = fc.get(k, "")
-                if v not in ("resolves", "resolves_oa", "match", "match_oa", "no_ref"):
+                if v not in ("resolves", "resolves_oa", "match", "match_oa",
+                             "match_bib", "no_ref"):
                     field_fail[k] += 1
 
         top_failing = sorted(
@@ -1426,13 +1127,21 @@ def apply_fixes(results: List[Dict[str, Any]], parent_dir: Path,
 # ---------------------------------------------------------------------------
 
 def load_audited_files(data_dir: Path) -> set:
-    """Find the latest meta_audit_log_*.json and return set of audited filenames."""
+    """Return filenames that PASSED in the most recent run's log.
+
+    Only `pass` entries are skipped on --resume: failures must be re-audited
+    (they may have been fixed by a subsequent --apply, or still need fixing).
+    """
     logs = sorted(data_dir.glob("meta_audit_log_*.json"))
     if not logs:
         return set()
     try:
         d = json.loads(logs[-1].read_text(encoding="utf-8"))
-        return {e["file"] for e in d.get("log_entries", []) if "file" in e}
+        return {
+            e["file"]
+            for e in d.get("log_entries", [])
+            if e.get("status") == "pass" and "file" in e
+        }
     except Exception:
         return set()
 
@@ -1456,12 +1165,14 @@ def main():
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     ap.add_argument("--limit", type=int, default=0, help="audit only first N files")
     ap.add_argument("--sample", type=int, default=0, help="random sample of N files")
-    ap.add_argument("--offline", action="store_true", help="skip all external APIs (.bib + Zotero only)")
+    ap.add_argument("--offline", action="store_true",
+                    help="no external APIs (.bib + local Zotero only)")
     ap.add_argument("--no-crossref", action="store_true")
     ap.add_argument("--no-pubmed", action="store_true")
     ap.add_argument("--no-openalex", action="store_true")
     ap.add_argument("--no-zotero", action="store_true")
-    ap.add_argument("--resume", action="store_true", help="skip files in the previous run's log")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip files that PASSED in the previous run's log")
     ap.add_argument("--apply", action="store_true", help="write fixes back (implies backup)")
     ap.add_argument("--backup-dir", type=Path, default=None,
                     help="default: data/parent_store_backup_metafix_<DATE>")
@@ -1476,15 +1187,22 @@ def main():
         format="%(levelname)s %(message)s",
     )
 
-    # Defaults
+    if args.limit and args.sample:
+        ap.error("--limit and --sample are mutually exclusive")
+
+    # Defaults. --offline disables the external APIs only; the LOCAL Zotero
+    # client stays enabled (it makes no network call outside this machine).
     use_crossref = not args.offline and not args.no_crossref
     use_pubmed = not args.offline and not args.no_pubmed
     use_openalex = not args.offline and not args.no_openalex
-    use_zotero = not args.offline and not args.no_zotero
+    use_zotero = not args.no_zotero
 
     # Load .bib
     if not args.bib.exists():
         log.error("bib file not found: %s", args.bib)
+        return 1
+    if not args.parent_dir.exists():
+        log.error("parent dir not found: %s", args.parent_dir)
         return 1
     log.info("parsing %s ...", args.bib)
     bib_entries = parse_bib_entries(args.bib)
@@ -1506,7 +1224,7 @@ def main():
     files = sorted(args.parent_dir.glob("*.json"))
     if args.limit:
         files = files[: args.limit]
-    if args.sample:
+    elif args.sample:
         import random
         random.seed(42)
         files = sorted(random.sample(files, min(args.sample, len(files))))
@@ -1514,7 +1232,7 @@ def main():
         audited = load_audited_files(args.data_dir)
         before = len(files)
         files = [f for f in files if f.name not in audited]
-        log.info("resume: %d files already audited, %d remaining", before - len(files), len(files))
+        log.info("resume: %d files passed previously, %d to audit", before - len(files), len(files))
 
     log.info("auditing %d files (mode=%s)...", len(files),
              "apply" if args.apply else "dry-run")
