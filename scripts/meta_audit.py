@@ -73,10 +73,8 @@ YEAR_TOLERANCE_SEARCH = 2      # search window for crossref/pubmed
 CROSSREF_MIN_INTERVAL = 1.0 / 50   # polite pool allows 50/s; be conservative
 PUBMED_MIN_INTERVAL = 0.34         # 3 req/s without API key
 OPENALEX_MIN_INTERVAL = 0.1         # 10 req/s polite
-ZOTERO_MIN_INTERVAL = 0.1
 
 HTTP_TIMEOUT = 10
-ZOTERO_TIMEOUT = 3
 
 log = logging.getLogger("meta_audit")
 
@@ -90,6 +88,8 @@ from bib_utils import (
     is_doi_like, is_fake_doi, jaccard, normalize, normalize_doi,
     parse_bib_entries, strip_author_year_prefix, title_tokens,
 )
+
+import zotero_access  # noqa: E402  (scripts/ sibling; MCP-first Zotero access)
 
 
 # ---------------------------------------------------------------------------
@@ -369,12 +369,17 @@ class OpenAlexClient:
 
 
 class ZoteroClient:
-    """Zotero local API client. Optional corroboration source."""
+    """Zotero corroboration source.
+
+    Delegates to zotero_access (scripts/zotero_access.py): the Zotero MCP
+    server (`zotero-mcp`) is the primary path, the local HTTP API the
+    fallback. The `base_url` argument is kept for CLI/UX compatibility and
+    logging only.
+    """
 
     def __init__(self, base_url: str, enabled: bool = True):
         self.base_url = base_url.rstrip("/")
         self.enabled = enabled
-        self._last = 0.0
         self.calls = 0
         self.errors = 0
         self.available = False
@@ -383,56 +388,40 @@ class ZoteroClient:
 
     def _check(self):
         try:
-            req = urllib.request.Request(f"{self.base_url}/api/users/0/items?limit=1")
-            with urllib.request.urlopen(req, timeout=ZOTERO_TIMEOUT) as r:
-                json.loads(r.read())
-            self.available = True
+            self.available = zotero_access.available()
         except Exception:
             self.available = False
+        if not self.available:
             log.info("zotero not available at %s — skipping", self.base_url)
-
-    def _throttle(self):
-        now = time.time()
-        wait = ZOTERO_MIN_INTERVAL - (now - self._last)
-        if wait > 0:
-            time.sleep(wait)
-        self._last = time.time()
 
     def search(self, title: str) -> Optional[Dict[str, Any]]:
         if not self.enabled or not self.available or not title:
             return None
-        self._throttle()
-        url = f"{self.base_url}/api/users/0/items?q={urllib.parse.quote(title[:200])}&limit=3&itemType=-attachment"
+        self.calls += 1
         try:
-            self.calls += 1
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=ZOTERO_TIMEOUT) as r:
-                items = json.loads(r.read().decode("utf-8"))
+            items = zotero_access.zotero_search(title[:200], limit=3)
         except Exception as ex:
             self.errors += 1
             log.debug("zotero search failed: %s", ex)
             return None
         if not items:
+            self.errors += 1
             return None
         # Pick the first item with a matching title
+        ps = title_tokens(title)
         for it in items:
-            data = it.get("data", {})
-            t = data.get("title", "")
+            t = it.get("title", "")
             if not t:
                 continue
-            ts = title_tokens(t)
-            ps = title_tokens(title)
-            if jaccard(ts, ps) >= 0.70:
+            if jaccard(title_tokens(t), ps) >= 0.70:
+                full = zotero_access.zotero_item(it["key"]) or it
                 return {
-                    "key": data.get("key", ""),
-                    "title": t,
-                    "doi": data.get("DOI", ""),
-                    "year": (data.get("date", "") or "")[:4],
-                    "authors": "; ".join(
-                        (c.get("lastName", "") + "," + c.get("firstName", ""))
-                        for c in data.get("creators", [])
-                    ),
-                    "journal": data.get("publicationTitle", "") or data.get("journalTitle", ""),
+                    "key": full.get("key", ""),
+                    "title": full.get("title", ""),
+                    "doi": full.get("doi", ""),
+                    "year": full.get("year", ""),
+                    "authors": full.get("authors", ""),
+                    "journal": full.get("journal", ""),
                 }
         return None
 

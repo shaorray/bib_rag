@@ -8,16 +8,19 @@ fixtures that mirror the real Zotero export and parent_store formats.
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bib_utils as U
 import bib_to_parent_store as B
 import fill_meta_key_in_parent_store as F
+import zotero_access as ZA
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +361,126 @@ class TestMetaAuditHelpers(unittest.TestCase):
             stats2 = M.apply_fixes(results2, parent, backup, min_confidence="medium")
             self.assertEqual(stats2["skipped"], 1)
             self.assertEqual(json.loads(fp.read_text(encoding="utf-8"))[0]["meta"]["doi"], "10.1/x")
+
+
+# ---------------------------------------------------------------------------
+# zotero_access — MCP-first Zotero layer (network-free; HTTP mocked)
+# ---------------------------------------------------------------------------
+
+SEARCH_MD = """\
+# Search Results for 'eph receptor'
+
+## 1. Cell segregation and border sharpening by Eph receptor
+**Type:** journalArticle
+**Item Key:** GB78JG9S
+**Date:** 07/2017
+**Authors:** Taylor, Harriet B.; Khuong, Anaïs; Wu, Zhonglin
+**Abstract:** Eph receptor and ephrin signalling...
+
+## 2. The Shb scaffold binds the Nck adaptor protein
+**Type:** journalArticle
+**Item Key:** UUFX4CT5
+**Date:** 03/2020
+**Authors:** Wagner, Melany J.
+"""
+
+
+class TestZoteroAccess(unittest.TestCase):
+    def setUp(self):
+        self._saved_env = os.environ.get("BIB_RAG_ZOTERO_MCP")
+        self._saved_flag = ZA._mcp_disabled
+        os.environ["BIB_RAG_ZOTERO_MCP"] = "0"
+        ZA._mcp_disabled = True
+
+    def tearDown(self):
+        if self._saved_env is None:
+            os.environ.pop("BIB_RAG_ZOTERO_MCP", None)
+        else:
+            os.environ["BIB_RAG_ZOTERO_MCP"] = self._saved_env
+        ZA._mcp_disabled = self._saved_flag
+
+    def test_parse_search_markdown(self):
+        items = ZA._parse_search_markdown(SEARCH_MD)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["key"], "GB78JG9S")
+        self.assertEqual(items[0]["title"],
+                         "Cell segregation and border sharpening by Eph receptor")
+        self.assertIn("Taylor", items[0]["authors"])
+        self.assertEqual(items[1]["key"], "UUFX4CT5")
+
+    def test_parse_search_markdown_empty(self):
+        self.assertEqual(ZA._parse_search_markdown(""), [])
+        self.assertEqual(ZA._parse_search_markdown("## 1. no key here"), [])
+
+    def test_mcp_search_unwraps_structured_content(self):
+        # REGRESSION: zotero_search_items returns structuredContent = {"result": "<markdown>"}.
+        # It must be parsed as markdown — not JSON-dumped (which yielded 0 items).
+        fake = mock.Mock()
+        fake.call_tool.return_value = {"result": SEARCH_MD}
+        with mock.patch.object(ZA, "_get_mcp", return_value=fake):
+            items = ZA._mcp_search("eph")
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["key"], "GB78JG9S")
+
+    def test_mcp_item_unwraps_result(self):
+        fake = mock.Mock()
+        fake.call_tool.return_value = {"result": {
+            "key": "K9",
+            "data": {"title": "T", "DOI": "10.1/9", "date": "2020-05-01",
+                     "publicationTitle": "J", "creators": []},
+        }}
+        with mock.patch.object(ZA, "_get_mcp", return_value=fake):
+            item = ZA._mcp_item("K9")
+        self.assertEqual(item["doi"], "10.1/9")
+        self.assertEqual(item["year"], "2020")
+
+    def test_normalize_item(self):
+        d = {
+            "key": "K1", "title": "A Title", "DOI": "10.1/x", "date": "2021-03-01",
+            "publicationTitle": "Journal X", "volume": "5", "issue": "2",
+            "pages": "10-20",
+            "creators": [{"firstName": "Jane", "lastName": "Doe"},
+                         {"lastName": "Smith"}],
+        }
+        n = ZA._normalize_item(d, "K1")
+        self.assertEqual(n["doi"], "10.1/x")
+        self.assertEqual(n["year"], "2021")
+        self.assertEqual(n["journal"], "Journal X")
+        self.assertEqual(n["authors"], "Doe,Jane; Smith")
+        self.assertEqual(n["item_type"], "")
+
+    def test_display_authors(self):
+        self.assertEqual(ZA.display_authors("Doe,Jane;Smith,John"),
+                         "Jane Doe and John Smith")
+        self.assertEqual(ZA.display_authors("Doe,Jane;Smith,John;Wong,Ann;Li,Bo"),
+                         "Jane Doe et al.")
+        self.assertEqual(ZA.display_authors("Smith,John"), "John Smith")
+        self.assertEqual(ZA.display_authors(""), "Unknown")
+
+    def test_http_fallback_search(self):
+        with mock.patch.object(ZA, "_http_json", return_value=[
+            {"key": "K9", "data": {"title": "T", "DOI": "10.1/9", "date": "2020",
+                                   "creators": []}}
+        ]):
+            items = ZA.zotero_search("anything")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["doi"], "10.1/9")
+        self.assertEqual(items[0]["key"], "K9")
+
+    def test_http_fallback_item(self):
+        with mock.patch.object(ZA, "_http_json", return_value={
+            "key": "K1", "data": {"title": "T", "DOI": "10.1/x",
+                                  "date": "2019-01-01", "creators": []}
+        }):
+            item = ZA.zotero_item("K1")
+        self.assertIsNotNone(item)
+        self.assertEqual(item["year"], "2019")
+
+    def test_both_unavailable_graceful(self):
+        with mock.patch.object(ZA, "_http_json", return_value=None):
+            self.assertEqual(ZA.zotero_search("anything"), [])
+            self.assertIsNone(ZA.zotero_item("K1"))
+            self.assertFalse(ZA.available())
 
 
 if __name__ == "__main__":

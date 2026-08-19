@@ -92,6 +92,39 @@ python3 -B add_papers.py /path/to/pdfs/ --batch-size 5   # smaller batches
 
 ---
 
+## Zotero Access (MCP)
+
+bib_rag reaches your Zotero library through the **Zotero MCP server**
+([54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp),
+`zotero-mcp-server` on PyPI):
+
+```bash
+uv tool install zotero-mcp-server        # provides `zotero-mcp` + `zotero-cli`
+```
+
+Zotero desktop must be running with the local API enabled
+(Settings → Advanced → *Allow other applications on this computer to
+communicate with Zotero*). No API key is needed for local read access.
+
+The access layer (`scripts/zotero_access.py`) tries, in order:
+
+1. **Zotero MCP server** — `zotero-mcp serve --transport stdio`, queried over
+   MCP (`zotero_search_items`, `zotero_get_item_metadata` with `format=json`)
+2. **Zotero local HTTP API** (`http://localhost:23119`) — dependency-free fallback
+3. Graceful `None`/`[]` when Zotero is unreachable — consumers never crash
+
+Used by:
+
+- `scripts/meta_audit.py` — Zotero as one of the corroboration sources for
+  metadata proof-reading
+- `src/bib_rag_writer.py` / `src/bib_rag_writer_debate.py` — real author /
+  volume / issue / pages / DOI for APA & Vancouver citations
+
+Env knobs: `BIB_RAG_ZOTERO_MCP=0` forces the HTTP path;
+`BIB_RAG_ZOTERO_URL=...` overrides the local HTTP API base.
+
+---
+
 ## File Structure
 
 ```

@@ -10,12 +10,16 @@ Example:
 """
 
 import sys, re, requests
+from pathlib import Path
 from typing import List, Dict
 from odf.opendocument import OpenDocumentText
 from odf.text import P, H
 
+# Zotero access layer (scripts/zotero_access.py): MCP server first, local HTTP API fallback
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import zotero_access  # noqa: E402
+
 BIB_RAG_EMBED_URL = "http://localhost:8081/v1/embeddings"
-ZOTERO_BASE = "http://localhost:23119/api/users/0"
 CHROMA_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
 
 
@@ -73,50 +77,23 @@ def search_bib_rag(query: str, top_k: int = 5) -> List[Dict]:
 
 
 def search_zotero(title: str, doi: str = "") -> Dict:
-    """Find paper in Zotero."""
-    query = doi if doi else title
+    """Find paper in Zotero (via zotero_access: MCP server, HTTP fallback)."""
     clean_title = re.sub(r'^[A-Z][a-z]+ et al\. - \d{4} - ', '', title)
-    
-    resp = requests.get(f"{ZOTERO_BASE}/items", params={"q": clean_title, "limit": 3})
-    data = resp.json()
-    
-    if not data:
+
+    items = zotero_access.zotero_search(clean_title, limit=3)
+    if not items:
         return None
-    
-    item = data[0]
-    d = item.get("data", {})
-    
-    authors = []
-    for c in d.get("creators", []):
-        first = c.get("firstName", "")
-        last = c.get("lastName", "")
-        if first and last:
-            authors.append(f"{first} {last}")
-        elif last:
-            authors.append(last)
-    
-    if len(authors) > 3:
-        author_str = f"{authors[0]} et al."
-    elif authors:
-        author_str = ", ".join(authors[:-1]) + f" and {authors[-1]}" if len(authors) > 1 else authors[0]
-    else:
-        author_str = "Unknown"
-    
-    date_str = d.get("date", "")
-    year = ""
-    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', date_str)
-    if year_match:
-        year = year_match.group(1)
-    
+
+    full = zotero_access.zotero_item(items[0]["key"]) or items[0]
     return {
-        "authors": author_str,
-        "year": year,
-        "title": d.get("title", ""),
-        "journal": d.get("publicationTitle", ""),
-        "volume": d.get("volume", ""),
-        "issue": d.get("issue", ""),
-        "pages": d.get("pages", ""),
-        "doi": d.get("DOI", ""),
+        "authors": zotero_access.display_authors(full.get("authors", "")),
+        "year": full.get("year", ""),
+        "title": full.get("title", ""),
+        "journal": full.get("journal", ""),
+        "volume": full.get("volume", ""),
+        "issue": full.get("issue", ""),
+        "pages": full.get("pages", ""),
+        "doi": full.get("doi", ""),
     }
 
 
