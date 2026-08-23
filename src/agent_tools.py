@@ -13,12 +13,40 @@ Usage:
     parent = tools.retrieve_parent_chunks("parent_id_here")
 """
 
+import os
 import requests
 from typing import List, Dict, Optional
 from src.parent_store_manager import ParentStoreManager
 
 CHROMA_DB_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
 BIB_RAG_EMBED_URL = "http://localhost:8081/v1/embeddings"
+
+# --- Tool output budgets ---------------------------------------------------
+# The agent subgraph re-prefills the WHOLE message history on every iteration.
+# Parent chunks are large (median ~16k chars, p90 ~85k, max ~1.5M), so an
+# unbounded `retrieve_parent_chunks` ToolMessage makes the next LLM prefill
+# take minutes on a slow local model (e.g. Qwen3.8-27B). Cap each tool result
+# so the per-iteration context stays bounded. Env-overridable:
+#   RETRIEVE_PARENT_MAX_CHARS, SEARCH_RESULT_MAX_CHARS, MANY_PARENT_MAX_CHARS
+def _budget(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+RETRIEVE_PARENT_MAX_CHARS = _budget("RETRIEVE_PARENT_MAX_CHARS", 8000)   # ~2000 tokens
+SEARCH_RESULT_MAX_CHARS = _budget("SEARCH_RESULT_MAX_CHARS", 800)        # per result
+MANY_PARENT_MAX_CHARS = _budget("MANY_PARENT_MAX_CHARS", 1500)
+SEARCH_MAX_LIMIT = _budget("SEARCH_MAX_LIMIT", 6)
+
+
+def _clip(text: str, max_chars: int) -> str:
+    """Truncate text to `max_chars`, marking the cut."""
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n…[truncated at {max_chars} chars]"
+
 
 class ToolFactory:
     """Factory for creating agent tools with hierarchical retrieval."""
@@ -79,17 +107,20 @@ class ToolFactory:
             embedding = self.embed_query(query)
             if not embedding:
                 return "EMBEDDING_ERROR: Could not generate query embedding"
-            
+
+            # Clamp the result count so a single search can't flood the context.
+            limit = max(1, min(int(limit or 5), SEARCH_MAX_LIMIT))
+
             # Search in ChromaDB
             results = self.collection.query(
                 query_embeddings=[embedding],
                 n_results=limit,
                 include=["documents", "metadatas", "distances"]
             )
-            
+
             if not results or not results["ids"][0]:
                 return "NO_RELEVANT_CHUNKS"
-            
+
             # Format results
             output_lines = []
             for i in range(len(results["ids"][0])):
@@ -97,21 +128,21 @@ class ToolFactory:
                 meta = results["metadatas"][0][i]
                 dist = results["distances"][0][i]
                 sim = 1.0 / (1.0 + dist)
-                
+
                 parent_id = meta.get("parent_id", "unknown")
                 source = meta.get("source", "unknown")
                 section = meta.get("section", "unknown")
-                
+
                 output_lines.append(
                     f"--- RESULT {i+1} (similarity: {sim:.3f}) ---\n"
                     f"Source: {source}\n"
                     f"Section: {section}\n"
                     f"Parent ID: {parent_id}\n"
-                    f"Content: {doc.strip()}"
+                    f"Content: {_clip(doc, SEARCH_RESULT_MAX_CHARS)}"
                 )
-            
+
             return "\n\n".join(output_lines)
-            
+
         except Exception as e:
             return f"RETRIEVAL_ERROR: {str(e)}"
     
@@ -143,7 +174,7 @@ class ToolFactory:
                 f"Authors: {meta.get('authors', 'N/A')}\n"
                 f"Year: {meta.get('year', 'N/A')}\n"
                 f"Word count: {parent.get('word_count', 0)}\n"
-                f"\nContent:\n{content.strip()}"
+                f"\nContent:\n{_clip(content, RETRIEVE_PARENT_MAX_CHARS)}"
             )
             
         except Exception as e:
@@ -168,7 +199,7 @@ class ToolFactory:
                     f"Title: {meta.get('title', 'N/A')}\n"
                     f"Year: {meta.get('year', 'N/A')}\n"
                     f"Word count: {parent.get('word_count', 0)}\n"
-                    f"\nContent:\n{parent.get('content', '').strip()[:1000]}..."
+                    f"\nContent:\n{_clip(parent.get('content', ''), MANY_PARENT_MAX_CHARS)}"
                 )
             
             return "\n\n".join(output_lines)

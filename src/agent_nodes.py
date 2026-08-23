@@ -8,6 +8,7 @@ Adapted from the reference implementation for the bib_rag domain:
 """
 
 from typing import Literal, Set
+import os
 from langchain_core.messages import SystemMessage, HumanMessage, RemoveMessage, AIMessage, ToolMessage
 from langgraph.types import Command
 
@@ -22,8 +23,26 @@ from .agent_prompts import (
 )
 
 # --- Configuration ---
-MAX_ITERATIONS = 10
-MAX_TOOL_CALLS = 8
+# Resolve iteration/tool-call limits from env, defaulting by model speed.
+# A slow local model (e.g. Qwen3.8-27B at ~33 t/s) must do FEWER serial LLM
+# calls per query or it times out; a fast cloud model (glm-5.2) can afford more.
+# Explicit env overrides always win:
+#   AGENT_MAX_ITERATIONS, AGENT_MAX_TOOL_CALLS
+def _resolve_limits():
+    iters = os.environ.get("AGENT_MAX_ITERATIONS")
+    tools = os.environ.get("AGENT_MAX_TOOL_CALLS")
+    if iters and tools:
+        return int(iters), int(tools)
+    model = os.environ.get("LLM_MODEL", "glm-5.2:cloud")
+    # A local GGUF file (e.g. Qwen3.8-27B) is a slow dense model → conservative
+    # limits. Cloud models (glm-5.2:cloud, deepseek-v4-flash:cloud) are fast,
+    # even though they're served through Ollama on localhost:11434.
+    is_local = model.endswith(".gguf")
+    if is_local:
+        return 3, 4   # slow local model: conservative, avoid timeout
+    return 10, 8      # fast cloud model: generous
+
+MAX_ITERATIONS, MAX_TOOL_CALLS = _resolve_limits()
 BASE_TOKEN_THRESHOLD = 2000
 TOKEN_GROWTH_FACTOR = 0.9
 

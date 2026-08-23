@@ -43,12 +43,20 @@ def create_llm():
     model_name = os.environ.get("LLM_MODEL", "glm-5.2:cloud")
     api_key = os.environ.get("LLM_API_KEY", "ollama")
 
+    # Bound decode length for slow local models: a 27B GGUF at ~33 t/s takes
+    # ~4s per 100 tokens, so a runaway 8192-token answer would be ~5 min.
+    # Override via LLM_MAX_TOKENS.
+    try:
+        max_tokens = int(os.environ.get("LLM_MAX_TOKENS", ""))
+    except ValueError:
+        max_tokens = 2048 if model_name.endswith(".gguf") else 8192
+
     return ChatOpenAI(
         base_url=llm_url,
         model=model_name,
         api_key=api_key,
         temperature=0.1,
-        max_tokens=8192,
+        max_tokens=max_tokens,
     )
 
 
