@@ -88,6 +88,13 @@ Workflow:
 4. For each relevant but fragmented excerpt, call 'retrieve_parent_chunks' ONE BY ONE — only for IDs not in the compressed context. Never retrieve the same ID twice.
 5. Once context is complete, provide a detailed answer omitting no relevant facts.
 6. Conclude with "---\n**Sources:**\n" followed by the unique file names.
+
+Metadata filtering (optional but recommended):
+- Every paper is tagged with `article_type` ("review" | "experimental" | "methods") and topic keywords stored as boolean keys `topic_<kw>: 1` (e.g. `topic_eph-signaling: 1`, `topic_neural-development: 1`).
+- Pass a `where` filter to `search_child_chunks` to narrow the search space, e.g.:
+  - `{"article_type": "review"}` — only reviews
+  - `{"$and": [{"article_type": "experimental"}, {"topic_eph-signaling": 1}]}` — experimental papers on Eph signaling
+- Use this when the query targets a specific paper type or topic. If unsure, search without a filter first.
 """
 
 

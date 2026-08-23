@@ -91,14 +91,18 @@ class ToolFactory:
             print(f"❌ Embedding failed: {e}")
             return None
     
-    def search_child_chunks(self, query: str, limit: int = 5) -> str:
+    def search_child_chunks(self, query: str, limit: int = 5, where: Optional[dict] = None) -> str:
         """
         Search for top-K most relevant child chunks in ChromaDB.
-        
+
         Args:
             query: Search query string
             limit: Maximum number of results (default 5)
-        
+            where: Optional ChromaDB metadata filter dict, e.g.
+                {"article_type": "review"} or
+                {"$and": [{"article_type": "review"}, {"topic_eph-signaling": 1}]}
+                Topic keywords are stored as boolean keys `topic_<kw>: 1`.
+
         Returns:
             Formatted string with child chunks and their parent_ids
         """
@@ -115,6 +119,7 @@ class ToolFactory:
             results = self.collection.query(
                 query_embeddings=[embedding],
                 n_results=limit,
+                where=where,
                 include=["documents", "metadatas", "distances"]
             )
 
@@ -218,9 +223,9 @@ def create_tools(collection=None):
     factory = ToolFactory(collection)
     
     @tool
-    def search_child_chunks(query: str, limit: int = 5) -> str:
-        """Search for relevant small child chunks in the document database. Returns excerpts with parent IDs for full context retrieval."""
-        return factory.search_child_chunks(query, limit)
+    def search_child_chunks(query: str, limit: int = 5, where: Optional[dict] = None) -> str:
+        """Search for relevant small child chunks in the document database. Returns excerpts with parent IDs for full context retrieval. Optional `where` is a ChromaDB metadata filter (e.g. {"article_type": "review"} or {"$and": [{"article_type": "review"}, {"topic_eph-signaling": 1}]})."""
+        return factory.search_child_chunks(query, limit, where)
     
     @tool
     def retrieve_parent_chunks(parent_id: str) -> str:
