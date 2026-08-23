@@ -37,6 +37,18 @@ is the recommended choice for speed — a full agentic query (rewrite →
 orchestrator → multiple tool calls → retrieval → 500-word answer) completes in
 ~60s, vs 150s+ timeouts on the local dense model.
 
+**How the two differ:**
+- **Cloud** (e.g. `glm-5.2:cloud`, `deepseek-v4-flash:cloud`): served over the
+  network, large MoE, fast inference. Deeper retrieval in the same time budget
+  and richer answers. Requires a network connection and may incur cost.
+- **Local** (a GGUF file served by llama-server, e.g. on port 5015): runs fully
+  offline, keeps your corpus private, no cost. Slower inference, so it is given
+  a smaller per-query budget (fewer iterations/tool calls) to avoid timeouts.
+- The agent auto-detects which backend is configured and adjusts the per-query
+  search budget accordingly — local models get a conservative budget, cloud
+  models a more generous one. You can override this via `AGENT_MAX_ITERATIONS`
+  and `AGENT_MAX_TOOL_CALLS`.
+
 ```bash
 # Cloud (default) — no env vars needed
 /usr/bin/python3.10 -B agentic_query.py "your question"
