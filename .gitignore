@@ -18,3 +18,4 @@ __pycache__/
 # Temp
 tmp/
 .temp/
+scripts/tmp_*.py
