@@ -7,8 +7,8 @@ import os, sys, re, json, hashlib, time, requests
 from pathlib import Path
 from langchain_community.vectorstores import Chroma
 
-# Shared chunking logic (single source of truth)
-from src.chunking import (
+# Shared chunking logic (single source of truth) — same dir as this script
+from chunking import (
     clean_text, truncate_at_references, extract_meta,
     extract_sections, split_into_paragraphs,
     create_child_chunks, create_parent_chunks, save_parent_store,

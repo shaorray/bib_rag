@@ -5,7 +5,7 @@ add_papers.py — Add new PDFs to bib_rag index
 Pipeline:
   1. Extract PDF → Markdown (pymupdf4llm)
   2. Copy markdown to papers directory (bib_rag's source dir)
-  3. Run hierarchical build (incremental — only new/changed files indexed)
+  3. Index each markdown via src/index_single_paper.py (llama-server embedding)
   4. Verify with a quick query
 
 Usage:
@@ -15,7 +15,7 @@ Usage:
   python3 -B add_papers.py /path/to/pdfs/ --batch-size 5
 
 Prerequisites:
-  - bge-m3 embedding server OR SentenceTransformers (build script loads CPU model)
+  - llama-server embedding endpoint on port 8081 (bge-m3)
   - pymupdf4llm installed (pip install pymupdf4llm)
 
 Options:
@@ -37,8 +37,13 @@ from datetime import datetime
 # ---- Configuration ----
 KB_ROOT = Path("/Disk_bot/Eph/bib_rag")
 DEFAULT_PAPERS_DIR = Path("/Disk_bot/paper_lib/My Library/md")
-BUILD_SCRIPT = KB_ROOT / "src" / "build_hierarchical.py"
 QUERY_SCRIPT = KB_ROOT / "src" / "query_bib_rag.py"
+
+# Indexing is done by src/index_single_paper.py (uses llama-server embedding on
+# port 8081, bypassing the broken SentenceTransformers import). build_hierarchical.py
+# is retired — it depended on SentenceTransformer which no longer imports.
+sys.path.insert(0, str(KB_ROOT / "src"))
+from index_single_paper import index_paper
 
 # ---- PDF Extraction ----
 
@@ -95,29 +100,24 @@ def find_existing_md(pdf_path: Path, papers_dir: Path) -> Path | None:
 
 # ---- Build ----
 
-def run_build(papers_dir: Path, batch_size: int) -> bool:
-    """Run hierarchical build script (incremental)."""
-    print(f"\n🔧 Running hierarchical build (incremental)...")
-    print(f"   Papers dir: {papers_dir}")
-    print(f"   Batch size: {batch_size}")
+def run_build(md_files: list, batch_size: int) -> bool:
+    """Index each markdown file via src/index_single_paper.index_paper().
 
-    cmd = [
-        sys.executable, "-B", str(BUILD_SCRIPT),
-        "--papers-dir", str(papers_dir),
-        "--batch-size", str(batch_size),
-    ]
-
-    try:
-        result = subprocess.run(cmd, cwd=str(KB_ROOT))
-        if result.returncode == 0:
-            print("   ✅ Build completed successfully")
-            return True
-        else:
-            print(f"   ❌ Build failed (exit code {result.returncode})")
-            return False
-    except Exception as e:
-        print(f"   ❌ Build error: {e}")
-        return False
+    Uses the llama-server embedding endpoint (port 8081) — the same bge-m3 model
+    the retired build_hierarchical.py used, but without the broken
+    SentenceTransformers import.
+    """
+    print(f"\n🔧 Indexing {len(md_files)} markdown file(s) via index_single_paper...")
+    ok = 0
+    for i, md in enumerate(md_files, 1):
+        print(f"\n[{i}/{len(md_files)}]")
+        try:
+            if index_paper(md):
+                ok += 1
+        except Exception as e:
+            print(f"   ❌ Index failed: {e}")
+    print(f"\n   ✅ Indexed {ok}/{len(md_files)} successfully")
+    return ok > 0
 
 
 # ---- Verification ----
@@ -218,14 +218,16 @@ def main():
 
     print(f"\n📊 Summary: {total_new} new, {total_skip} already indexed")
 
-    # ---- Step 3: Build (incremental) ----
+    # ---- Step 3: Index (via index_single_paper) ----
     print(f"\n{'─'*70}")
-    print("Step 2: Hierarchical build (incremental)")
+    print("Step 2: Indexing markdown files")
     print(f"{'─'*70}")
 
-    success = run_build(papers_dir, args.batch_size)
+    # Index all new + skipped markdown files (skipped = already extracted MD)
+    md_to_index = md_files_added + md_files_skipped
+    success = run_build(md_to_index, args.batch_size)
     if not success:
-        print("\n⚠️  Build had issues. Papers may not be fully indexed.")
+        print("\n⚠️  Indexing had issues. Papers may not be fully indexed.")
         sys.exit(1)
 
     # ---- Step 4: Verify ----
