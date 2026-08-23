@@ -29,18 +29,26 @@ from .agent_prompts import (
 # Explicit env overrides always win:
 #   AGENT_MAX_ITERATIONS, AGENT_MAX_TOOL_CALLS
 def _resolve_limits():
-    iters = os.environ.get("AGENT_MAX_ITERATIONS")
-    tools = os.environ.get("AGENT_MAX_TOOL_CALLS")
-    if iters and tools:
-        return int(iters), int(tools)
+    # Each env override is honored independently; the unset one falls back to
+    # a per-model-speed default.
+    def _int_env(name):
+        try:
+            v = int(os.environ.get(name, "").strip() or 0)
+            return v if v > 0 else 0
+        except ValueError:
+            return 0
+
+    iters, tools = _int_env("AGENT_MAX_ITERATIONS"), _int_env("AGENT_MAX_TOOL_CALLS")
     model = os.environ.get("LLM_MODEL", "glm-5.2:cloud")
-    # A local GGUF file (e.g. Qwen3.8-27B) is a slow dense model → conservative
-    # limits. Cloud models (glm-5.2:cloud, deepseek-v4-flash:cloud) are fast,
-    # even though they're served through Ollama on localhost:11434.
-    is_local = model.endswith(".gguf")
+    llm_url = os.environ.get("LLM_URL", "")
+    # A local GGUF file (e.g. Qwen3.8-27B, ~33 t/s decode) is a slow dense
+    # model → conservative limits. Detect it by the .gguf suffix OR the local
+    # llama-server port (:5015); cloud models are served through Ollama
+    # (localhost:11434) and are fast.
+    is_local = model.endswith(".gguf") or ":5015" in llm_url
     if is_local:
-        return 3, 4   # slow local model: conservative, avoid timeout
-    return 10, 8      # fast cloud model: generous
+        return iters or 3, tools or 4   # slow local model: conservative, avoid timeout
+    return iters or 10, tools or 8      # fast cloud model: generous
 
 MAX_ITERATIONS, MAX_TOOL_CALLS = _resolve_limits()
 BASE_TOKEN_THRESHOLD = 2000
@@ -294,6 +302,15 @@ def should_compress_context(state: AgentState) -> Command[Literal["compress_cont
 
     updated_ids = state.get("retrieval_keys", set()) | new_ids
 
+    # Short loops don't benefit from mid-loop compression: compressing costs
+    # one extra slow LLM call (~30-40s on a local 27B) and the lossy summary
+    # actually *hurts* answer grounding. The tool outputs are already capped
+    # (agent_tools budgets), so the final orchestrator can prefill the raw
+    # evidence directly. Only compress when the loop is long enough to
+    # re-prefill the accumulated context many times.
+    if MAX_ITERATIONS <= 4:
+        return Command(update={"retrieval_keys": updated_ids}, goto="orchestrator")
+
     current_token_messages = estimate_context_tokens(messages)
     current_token_summary = estimate_context_tokens(
         [HumanMessage(content=state.get("context_summary", ""))]
@@ -394,6 +411,12 @@ def aggregate_answers(state: State, llm):
     """
     if not state.get("agent_answers"):
         return {"messages": [AIMessage(content="No answers were generated.")]}
+
+    # A single agent answer is already a complete, sourced response — an
+    # extra aggregation round-trip would only re-generate it (~25-30s on a
+    # slow local model). Return it as-is.
+    if len(state["agent_answers"]) == 1:
+        return {"messages": [AIMessage(content=state["agent_answers"][0]["answer"])]}
 
     sorted_answers = sorted(state["agent_answers"], key=lambda x: x["index"])
 
