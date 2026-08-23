@@ -102,7 +102,14 @@ def rewrite_query(state: State, llm):
         f"Conversation Context:\n{conversation_summary}\n" if conversation_summary.strip() else ""
     ) + f"User Query:\n{last_message.content}\n"
 
-    llm_with_structure = llm.with_config(temperature=0.1).with_structured_output(QueryAnalysis)
+    # Explicit method="function_calling": Ollama's OpenAI-compat endpoint does
+    # not honor the default structured-output method (json_mode / response_format
+    # is ignored by cloud models like glm-5.2), which caused pydantic
+    # "Invalid JSON" errors. function_calling routes through tool_calls, which
+    # glm-5.2 / deepseek-v4-flash support correctly.
+    llm_with_structure = llm.with_config(temperature=0.1).with_structured_output(
+        QueryAnalysis, method="function_calling"
+    )
     response = llm_with_structure.invoke(
         [
             SystemMessage(content=get_rewrite_query_prompt()),

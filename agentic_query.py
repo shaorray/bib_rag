@@ -26,14 +26,27 @@ from src.agent_tools import create_tools
 
 
 def create_llm():
-    """Create LLM client for Qwen3.6-35B via llama-server."""
-    llm_url = os.environ.get("LLM_URL", "http://localhost:5015/v1")
-    model_name = os.environ.get("LLM_MODEL", "qwen3.6-35b")
+    """Create LLM client for agentic RAG.
+
+    Default: Ollama cloud glm-5.2 (fast, supports function calling + JSON mode,
+    all tasks incl. final generation). Override via env vars:
+        LLM_URL   (default http://localhost:11434/v1)
+        LLM_MODEL (default glm-5.2:cloud)
+        LLM_API_KEY (default "ollama")
+    NOTE: kimi-k3:cloud is a pure reasoning model — its function calling and
+    structured output fail through Ollama's OpenAI-compat endpoint. Use glm-5.2
+    or deepseek-v4-flash instead.
+    To fall back to local Qwen3.8-27B, set LLM_URL=http://localhost:5015/v1
+    and LLM_MODEL=/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf
+    """
+    llm_url = os.environ.get("LLM_URL", "http://localhost:11434/v1")
+    model_name = os.environ.get("LLM_MODEL", "glm-5.2:cloud")
+    api_key = os.environ.get("LLM_API_KEY", "ollama")
 
     return ChatOpenAI(
         base_url=llm_url,
         model=model_name,
-        api_key="not-needed",
+        api_key=api_key,
         temperature=0.1,
         max_tokens=8192,
     )

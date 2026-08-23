@@ -11,19 +11,63 @@ Full LangGraph-powered agentic pipeline with hierarchical retrieval, context com
 ```bash
 cd bib_rag
 
-# Single query
-python3 -B agentic_query.py "What is the role of Eph receptors in neural development?"
+# Single query (default: fast cloud model via Ollama)
+/usr/bin/python3.10 -B agentic_query.py "What is the role of Eph receptors in neural development?"
 
 # Interactive chat mode
-python3 -B agentic_query.py --interactive
+/usr/bin/python3.10 -B agentic_query.py --interactive
 
 # Verbose mode (shows pipeline progress)
-python3 -B agentic_query.py "Compare EphA and EphB functions" --verbose
+/usr/bin/python3.10 -B agentic_query.py "Compare EphA and EphB functions" --verbose
 ```
 
-**Prerequisites**: Both servers must be running
-- LLM: Qwen3.6-35B on port 5015
+> **Note**: use `/usr/bin/python3.10` (the interpreter with langchain deps
+> installed), not bare `python3`.
+
+### Model Backend — Local vs Cloud
+
+The agentic graph can run on either a **local** model (private, offline) or a
+**fast cloud** model (via Ollama). All LLM calls — query rewrite, tool-call
+routing, context compression, aggregation, and final answer generation — are
+routed to whichever backend is configured.
+
+**Default: cloud (fast).** `create_llm()` in `agentic_query.py` points at
+Ollama's OpenAI-compatible endpoint and uses `glm-5.2:cloud` by default. This
+is the recommended choice for speed — a full agentic query (rewrite →
+orchestrator → multiple tool calls → retrieval → 500-word answer) completes in
+~60s, vs 150s+ timeouts on the local dense model.
+
+```bash
+# Cloud (default) — no env vars needed
+/usr/bin/python3.10 -B agentic_query.py "your question"
+
+# Local Qwen3.8-27B (private / offline) — override via env vars
+LLM_URL=http://localhost:5015/v1 \
+LLM_MODEL=/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf \
+/usr/bin/python3.10 -B agentic_query.py "your question"
+```
+
+**Env knobs** (all optional, defaults shown):
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `LLM_URL` | `http://localhost:11434/v1` | Ollama OpenAI-compat endpoint |
+| `LLM_MODEL` | `glm-5.2:cloud` | Cloud model (or local GGUF path) |
+| `LLM_API_KEY` | `ollama` | Ollama doesn't validate keys |
+
+**Cloud model caveats:**
+- `glm-5.2:cloud` and `deepseek-v4-flash:cloud` work (function calling + JSON
+  mode both supported).
+- **`kimi-k3:cloud` does NOT work** for agentic RAG — it is a pure reasoning
+  model whose function calling and structured output fail through Ollama's
+  OpenAI-compat endpoint (reasoning eats all tokens, `content` comes back
+  empty).
+- Cloud calls need network and may incur cost. Use the local model if your
+  corpus contains unpublished/sensitive material.
+
+**Prerequisites**: Embedding server must be running.
 - Embeddings: bge-m3 on port 8081
+- LLM: either Ollama (port 11434, cloud) **or** local Qwen3.8-27B (port 5015)
 
 ### Architecture
 
