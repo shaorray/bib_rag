@@ -2,7 +2,7 @@
 System prompts for the bib_rag agentic graph nodes.
 
 Adapted for the academic papers (Eph/ephrin) domain, using OpenAI-compatible
-API via llama-server (Qwen3.6-35B) instead of Ollama qwen3:4b.
+API via llama-server (Qwen3.6-35B) instead of a small local model.
 """
 
 

@@ -28,20 +28,20 @@ from src.agent_tools import create_tools
 def create_llm():
     """Create LLM client for agentic RAG.
 
-    Default: Ollama cloud glm-5.2 (fast, supports function calling + JSON mode,
-    all tasks incl. final generation). Override via env vars:
-        LLM_URL   (default http://localhost:11434/v1)
+    Default: fast cloud glm-5.2 (supports function calling + JSON mode, all
+    tasks incl. final generation). Override via env vars:
+        LLM_URL   (default http://localhost:11434/v1 — OpenAI-compatible gateway)
         LLM_MODEL (default glm-5.2:cloud)
-        LLM_API_KEY (default "ollama")
+        LLM_API_KEY (default "not-required" — the gateway doesn't validate it)
     NOTE: kimi-k3:cloud is a pure reasoning model — its function calling and
-    structured output fail through Ollama's OpenAI-compat endpoint. Use glm-5.2
-    or deepseek-v4-flash instead.
+    structured output fail through the OpenAI-compat gateway endpoint. Use
+    glm-5.2 or deepseek-v4-flash instead.
     To fall back to local Qwen3.8-27B, set LLM_URL=http://localhost:5015/v1
     and LLM_MODEL=/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf
     """
     llm_url = os.environ.get("LLM_URL", "http://localhost:11434/v1")
     model_name = os.environ.get("LLM_MODEL", "glm-5.2:cloud")
-    api_key = os.environ.get("LLM_API_KEY", "ollama")
+    api_key = os.environ.get("LLM_API_KEY", "not-required")
 
     # Bound decode length for slow local models: a 27B GGUF at ~33 t/s takes
     # ~4s per 100 tokens, so a runaway 8192-token answer would be ~5 min.

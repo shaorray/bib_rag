@@ -146,7 +146,7 @@ def main():
     done_set = load_done(args.resume)
 
     from openai import OpenAI
-    client = OpenAI(base_url=llm_url, api_key="ollama")
+    client = OpenAI(base_url=llm_url, api_key="not-required")
 
     # Collect md files from all dirs
     papers = []

@@ -11,7 +11,7 @@ Full LangGraph-powered agentic pipeline with hierarchical retrieval, context com
 ```bash
 cd bib_rag
 
-# Single query (default: fast cloud model via Ollama)
+# Single query (default: fast cloud model)
 /usr/bin/python3.10 -B agentic_query.py "What is the role of Eph receptors in neural development?"
 
 # Interactive chat mode
@@ -26,60 +26,39 @@ cd bib_rag
 
 ### Model Backend — Local vs Cloud
 
-The agentic graph can run on either a **local** model (private, offline) or a
-**fast cloud** model (via Ollama). All LLM calls — query rewrite, tool-call
-routing, context compression, aggregation, and final answer generation — are
-routed to whichever backend is configured.
+Two backends, chosen via `LLM_URL` / `LLM_MODEL`:
 
-**Default: cloud (fast).** `create_llm()` in `agentic_query.py` points at
-Ollama's OpenAI-compatible endpoint and uses `glm-5.2:cloud` by default. This
-is the recommended choice for speed — a full agentic query (rewrite →
-orchestrator → multiple tool calls → retrieval → 500-word answer) completes in
-~60s, vs 150s+ timeouts on the local dense model.
+- **Cloud (default)**: `glm-5.2:cloud` through a local OpenAI-compatible
+  gateway (port 11434). Fast, but needs network and may incur cost.
+- **Local**: a GGUF file served by llama-server (port 5015), e.g. Qwen3.8-27B.
+  Fully offline and private, but slower — so it gets a smaller per-query
+  budget (3 iterations / 4 tool calls vs 10/8).
 
-**How the two differ:**
-- **Cloud** (e.g. `glm-5.2:cloud`, `deepseek-v4-flash:cloud`): served over the
-  network, large MoE, fast inference. Deeper retrieval in the same time budget
-  and richer answers. Requires a network connection and may incur cost.
-- **Local** (a GGUF file served by llama-server, e.g. on port 5015): runs fully
-  offline, keeps your corpus private, no cost. Slower inference, so it is given
-  a smaller per-query budget (fewer iterations/tool calls) to avoid timeouts.
-- The agent auto-detects which backend is configured and adjusts the per-query
-  search budget accordingly — local models get a conservative budget, cloud
-  models a more generous one. You can override this via `AGENT_MAX_ITERATIONS`
-  and `AGENT_MAX_TOOL_CALLS`.
+The agent auto-detects the backend and adjusts the budget; override with
+`AGENT_MAX_ITERATIONS` / `AGENT_MAX_TOOL_CALLS`.
 
 ```bash
-# Cloud (default) — no env vars needed
+# Cloud (default)
 /usr/bin/python3.10 -B agentic_query.py "your question"
 
-# Local Qwen3.8-27B (private / offline) — override via env vars
+# Local model (offline)
 LLM_URL=http://localhost:5015/v1 \
-LLM_MODEL=/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf \
+LLM_MODEL=/path/to/model.gguf \
 /usr/bin/python3.10 -B agentic_query.py "your question"
 ```
 
-**Env knobs** (all optional, defaults shown):
-
-| Var | Default | Meaning |
+| Env | Default | Meaning |
 |-----|---------|---------|
-| `LLM_URL` | `http://localhost:11434/v1` | Ollama OpenAI-compat endpoint |
-| `LLM_MODEL` | `glm-5.2:cloud` | Cloud model (or local GGUF path) |
-| `LLM_API_KEY` | `ollama` | Ollama doesn't validate keys |
+| `LLM_URL` | `http://localhost:11434/v1` | OpenAI-compatible gateway (cloud) |
+| `LLM_MODEL` | `glm-5.2:cloud` | Cloud model name, or local `.gguf` path |
+| `LLM_API_KEY` | `not-required` | placeholder — the gateway doesn't validate it |
 
-**Cloud model caveats:**
-- `glm-5.2:cloud` and `deepseek-v4-flash:cloud` work (function calling + JSON
-  mode both supported).
-- **`kimi-k3:cloud` does NOT work** for agentic RAG — it is a pure reasoning
-  model whose function calling and structured output fail through Ollama's
-  OpenAI-compat endpoint (reasoning eats all tokens, `content` comes back
-  empty).
-- Cloud calls need network and may incur cost. Use the local model if your
-  corpus contains unpublished/sensitive material.
+> Note: pure reasoning models (e.g. `kimi-k3:cloud`) fail at function calling
+> through the gateway — use `glm-5.2:cloud` or `deepseek-v4-flash:cloud`.
 
 **Prerequisites**: Embedding server must be running.
 - Embeddings: bge-m3 on port 8081
-- LLM: either Ollama (port 11434, cloud) **or** local Qwen3.8-27B (port 5015)
+- LLM: the cloud gateway (port 11434) **or** a local GGUF (port 5015)
 
 ### Architecture
 
@@ -107,17 +86,17 @@ aggregate_answers → Final Answer with Sources
 
 ### Quick Search
 ```bash
-python3 -B src/query_bib_rag.py "cis interaction mechanism"
+/usr/bin/python3.10 -B src/query_bib_rag.py "your keywords"
 ```
 
 ### Find Citations
 ```bash
-python3 -B src/query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
+/usr/bin/python3.10 -B src/query_bib_rag.py --cite "a claim to find supporting papers for" --top 3
 ```
 
 ### Write Paragraph with Citations
 ```bash
-python3 -B src/bib_rag_writer.py "Eph receptor signaling regulates cell segregation" \
+/usr/bin/python3.10 -B src/bib_rag_writer.py "your topic sentence" \
   --top 5 --style APA --output /path/to/output.odt
 ```
 
@@ -129,7 +108,7 @@ Put new PDFs in your paper library and run:
 
 ```bash
 cd bib_rag
-python3 -B add_papers.py /path/to/new/pdfs/
+/usr/bin/python3.10 -B add_papers.py /path/to/new/pdfs/
 ```
 
 This will:
@@ -140,8 +119,8 @@ This will:
 
 **Options:**
 ```bash
-python3 -B add_papers.py /path/to/pdfs/ --skip-extract   # if already markdown
-python3 -B add_papers.py /path/to/pdfs/ --batch-size 5   # smaller batches
+/usr/bin/python3.10 -B add_papers.py /path/to/pdfs/ --skip-extract   # if already markdown
+/usr/bin/python3.10 -B add_papers.py /path/to/pdfs/ --batch-size 5   # smaller batches
 ```
 
 **Prerequisite:** Embedding server must be running on port 8081.
@@ -235,13 +214,13 @@ curl http://localhost:5015/health   # LLM
 cd bib_rag
 
 # GPU build (recommended)
-python3 -B src/build_hierarchical_gpu.py --rebuild --batch-size 10
+/usr/bin/python3.10 -B src/build_hierarchical_gpu.py --rebuild --batch-size 10
 
 # Resume interrupted build
-python3 -B src/build_hierarchical_gpu.py --batch-size 10
+/usr/bin/python3.10 -B src/build_hierarchical_gpu.py --batch-size 10
 
 # CPU fallback (slower)
-python3 -B src/build_hierarchical.py
+/usr/bin/python3.10 -B src/build_hierarchical.py
 ```
 
 ---
@@ -251,13 +230,13 @@ python3 -B src/build_hierarchical.py
 ```bash
 # Comprehensive test suite (5 queries, ~5 minutes)
 cd bib_rag
-python3 -B src/test_comprehensive.py
+/usr/bin/python3.10 -B src/test_comprehensive.py
 
 # Single test query
-python3 -B src/test_agentic_graph.py
+/usr/bin/python3.10 -B src/test_agentic_graph.py
 
 # Evaluation: agentic vs baseline
-python3 -B src/evaluate.py
+/usr/bin/python3.10 -B src/evaluate.py
 ```
 
 ---

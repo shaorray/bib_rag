@@ -3,7 +3,7 @@ Node functions for the bib_rag agentic graph.
 
 Adapted from the reference implementation for the bib_rag domain:
 - ChromaDB with bge-m3 embeddings instead of Qdrant
-- OpenAI-compatible API via llama-server (Qwen3.6-35B) instead of Ollama
+- OpenAI-compatible API via llama-server (Qwen3.6-35B) instead of a small local model
 - Academic papers on Eph/ephrin instead of general PDFs
 """
 
@@ -43,8 +43,8 @@ def _resolve_limits():
     llm_url = os.environ.get("LLM_URL", "")
     # A local GGUF file (e.g. Qwen3.8-27B, ~33 t/s decode) is a slow dense
     # model → conservative limits. Detect it by the .gguf suffix OR the local
-    # llama-server port (:5015); cloud models are served through Ollama
-    # (localhost:11434) and are fast.
+    # llama-server port (:5015); cloud models are served through the
+    # OpenAI-compatible gateway (localhost:11434) and are fast.
     is_local = model.endswith(".gguf") or ":5015" in llm_url
     if is_local:
         return iters or 3, tools or 4   # slow local model: conservative, avoid timeout
@@ -129,7 +129,7 @@ def rewrite_query(state: State, llm):
         f"Conversation Context:\n{conversation_summary}\n" if conversation_summary.strip() else ""
     ) + f"User Query:\n{last_message.content}\n"
 
-    # Explicit method="function_calling": Ollama's OpenAI-compat endpoint does
+    # Explicit method="function_calling": the OpenAI-compat gateway endpoint does
     # not honor the default structured-output method (json_mode / response_format
     # is ignored by cloud models like glm-5.2), which caused pydantic
     # "Invalid JSON" errors. function_calling routes through tool_calls, which
