@@ -23,20 +23,49 @@ CHECKPOINT_FILE = f"{KB_ROOT}/data/build_hierarchical_checkpoint.json"
 EMBED_URL = "http://localhost:8081/embedding"
 
 def embed_texts(texts, batch_size=16):
-    """Embed texts using llama-server endpoint."""
+    """Embed texts using llama-server endpoint, with retry on transient failures."""
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i+batch_size]
         batch_embeddings = []
         for text in batch:
-            resp = requests.post(EMBED_URL, json={"content": text}, timeout=120)
-            data = resp.json()
-            # llama-server returns [{"index": 0, "embedding": [[...]]}]
-            emb = data[0]["embedding"][0] if isinstance(data[0]["embedding"][0], list) else data[0]["embedding"]
+            emb = _embed_one(text)
+            if emb is None:
+                raise RuntimeError(f"embedding failed after retries for chunk {i}")
             batch_embeddings.append(emb)
         all_embeddings.extend(batch_embeddings)
         print(f"   Embedded {min(i+batch_size, len(texts))}/{len(texts)} chunks")
     return all_embeddings
+
+
+def _embed_one(text, retries=3):
+    """Embed a single text with retry + backoff. Returns embedding list or None.
+
+    bge-m3 (this llama-server build) fails on inputs beyond ~500 words / ~2500
+    chars (returns an empty embedding). Truncate long inputs to a safe length so
+    a single oversized chunk (e.g. a markdown table) doesn't fail the whole paper.
+    """
+    import time as _time
+    # bge-m3 truncates internally anyway; cap well under the observed failure point
+    MAX_CHARS = 2000
+    if len(text) > MAX_CHARS:
+        text = text[:MAX_CHARS]
+    for attempt in range(retries):
+        try:
+            resp = requests.post(EMBED_URL, json={"content": text}, timeout=120)
+            data = resp.json()
+            # llama-server returns [{"index": 0, "embedding": [[...]]}]
+            emb = data[0]["embedding"]
+            if isinstance(emb, list) and emb and isinstance(emb[0], list):
+                return emb[0]
+            if isinstance(emb, list) and emb:
+                return emb
+            # empty embedding -> treat as failure, retry
+        except Exception:
+            pass
+        if attempt < retries - 1:
+            _time.sleep(2 * (attempt + 1))
+    return None
 
 def index_paper(md_path):
     md_path = Path(md_path)
