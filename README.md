@@ -164,30 +164,34 @@ Env knobs: `BIB_RAG_ZOTERO_MCP=0` forces the HTTP path;
 
 ```
 bib_rag/
-├── add_papers.py              ← Add new PDFs to index
-├── agentic_query.py           ← Query the agentic RAG system
+├── add_papers.py              ← Add new PDFs to the index (entry point)
+├── agentic_query.py           ← Query the agentic RAG system (entry point)
+├── CONTEXT.md                 ← Domain glossary (exact terminology)
 │
-├── src/
-│   ├── build_hierarchical_gpu.py  ← GPU build script
-│   ├── build_hierarchical.py     ← CPU build fallback
-│   ├── query_bib_rag.py           ← Quick semantic search
-│   ├── bib_rag_writer.py          ← Paragraph synthesis with citations
-│   ├── bib_rag_writer_debate.py   ← LLM debate synthesis
-│   ├── agentic_graph.py           ← Main LangGraph workflow
-│   ├── agent_nodes.py             ← 9 agent node functions
-│   ├── agent_edges.py             ← Routing logic
-│   ├── agent_prompts.py           ← System prompts
-│   ├── agent_schemas.py           ← State definitions
-│   ├── agent_tools.py             ← Hierarchical search/retrieve tools
-│   ├── parent_store_manager.py    ← JSON parent chunk loader
-│   ├── evaluate.py                ← Agentic vs baseline evaluation
-│   └── test_comprehensive.py      ← 5-test suite
+├── scripts/                   ← Utilities & pipelines
+│   ├── meta_audit.py          ← Metadata proof-reader + genuine-info fetcher
+│   ├── bib_to_parent_store.py · fill_meta_key_in_parent_store.py ← fill meta from My Library.bib
+│   ├── bib_utils.py           ← Shared normalization / .bib / filename helpers
+│   ├── zotero_access.py       ← Zotero access layer (MCP first, HTTP fallback)
+│   ├── test_utilities.py      ← Regression tests (no network)
+│   ├── classify_all.py · classify_demo.py · apply_tags.py · migrate_topics.py ← LLM classification pipeline
+│   └── classify_cadherin*.py · backfill_cadherin.py · batch_index_cadherin.py · retry_index_cadherin.py ← Cadherin corpus ingestion
 │
-├── chroma_db_new/               ← Vector database (ChromaDB)
-├── parent_store/                ← Parent chunks (JSON)
-└── data/
-    ├── build_hierarchical_checkpoint.json
-    └── incremental_metadata.json
+├── src/                       ← RAG library & query/writer tools
+│   ├── agentic_graph.py · agent_nodes.py · agent_edges.py ← LangGraph pipeline
+│   ├── agent_prompts.py · agent_schemas.py · agent_tools.py ← prompts / state / retrieval tools
+│   ├── build_hierarchical_gpu.py · build_hierarchical.py · index_single_paper.py · chunking.py ← index build
+│   ├── query_bib_rag.py       ← Quick semantic search & citations
+│   ├── bib_rag_writer.py · bib_rag_writer_debate.py · bib_rag_grill.py ← writers with citations
+│   ├── parent_store_manager.py ← Parent chunk loader
+│   └── evaluate.py · test_comprehensive.py · test_agentic_graph.py ← eval & tests
+│
+├── docs/                      ← Guides (QUICK_START, USAGE, ZOTERO_MCP_USAGE, …)
+├── data/                      ← Checkpoints & audit reports (gitignored)
+├── outputs/                   ← Generated reports (gitignored)
+├── chroma_db_new/             ← Vector database (gitignored)
+├── parent_store/              ← Parent chunks, JSON (gitignored)
+└── archive/                   ← Obsolete experiments (gitignored)
 ```
 
 ---

@@ -5,7 +5,7 @@ ChromaDB collection metadata. Preserves all existing metadata fields; only adds
 article_type (str) and topics (JSON list) per chunk sharing the same source.
 
 Usage:
-    /usr/bin/python3.10 -B apply_tags.py outputs/tags.csv
+    /usr/bin/python3.10 -B scripts/apply_tags.py outputs/tags.csv
 """
 import argparse
 import csv

@@ -8,9 +8,9 @@ CSV (source, year, article_type, topics) so the run is resumable and decoupled f
 writing to ChromaDB.
 
 Usage:
-    /usr/bin/python3.10 -B classify_all.py --batch 2 --resume out/tags.csv
+    /usr/bin/python3.10 -B scripts/classify_all.py --batch 2 --resume out/tags.csv
     # or switch backend:
-    /usr/bin/python3.10 -B classify_all.py --batch 4 --backend cloud --resume out/tags.csv
+    /usr/bin/python3.10 -B scripts/classify_all.py --batch 4 --backend cloud --resume out/tags.csv
 """
 import argparse
 import csv

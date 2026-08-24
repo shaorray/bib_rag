@@ -11,7 +11,7 @@ Design notes:
   - article_type: "review" | "experimental" | "methods" (single label).
 
 Usage:
-    /usr/bin/python3.10 -B classify_demo.py --sample 20 --batch 4
+    /usr/bin/python3.10 -B scripts/classify_demo.py --sample 20 --batch 4
 """
 import argparse
 import json

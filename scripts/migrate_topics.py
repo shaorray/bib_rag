@@ -6,7 +6,7 @@ NOT support $contains in v1.4.1). Keeps the original 'topics' JSON field too.
 
 Keyword normalization: lowercase, spaces -> hyphens, strip non-alnum/hyphen.
 Usage:
-    /usr/bin/python3.10 -B migrate_topics.py [--dry-run]
+    /usr/bin/python3.10 -B scripts/migrate_topics.py [--dry-run]
 """
 import argparse
 import json
