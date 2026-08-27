@@ -10,7 +10,7 @@ Usage:
   python3 -B query_bib_rag.py "Eph receptor signaling"
 
   # Switch to geo_rag:
-  BIB_RAG_ROOT=/Disk_bot/Eph/geo_rag python3 -B query_bib_rag.py "subduction zone"
+  BIB_RAG_ROOT=/Disk_bot/geo_rag python3 -B query_bib_rag.py "subduction zone"
 
   # Or use --kb flag (if script supports it):
   python3 -B query_bib_rag.py --kb geo_rag "subduction zone"
@@ -26,7 +26,7 @@ from pathlib import Path
 # ─── Named KB registry ─────────────────────────────────────────────────────
 _KB_REGISTRY = {
     "bib_rag": "/Disk_bot/Eph/bib_rag",
-    "geo_rag": "/Disk_bot/Eph/geo_rag",
+    "geo_rag": "/Disk_bot/geo_rag",
 }
 
 def get_kb_name() -> str:
