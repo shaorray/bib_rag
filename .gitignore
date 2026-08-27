@@ -4,10 +4,11 @@ parent_store_disabled/
 chroma_db_new/
 data/
 safe_zone/
-archive/
+/archive/
 outputs/
 eph_rag/
 geo_rag/
+# (docs/archive/ IS tracked — historical provenance)
 
 # Python cache
 __pycache__/

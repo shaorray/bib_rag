@@ -1,6 +1,20 @@
 # bib_rag
 
-Academic bibliography RAG system for evidence-based writing.
+Academic bibliography RAG toolkit for evidence-based writing. One toolkit,
+many libraries:
+
+```
+/Disk_bot/RAG/
+├── bib_rag/   ← HERE: the toolkit (code only, this repo)
+├── eph_rag/   ← Eph-ephrin library (default; collection bib_rag_papers, ~470K chunks)
+├── geo_rag/   ← geology/renewables library
+└── <name>_rag/ ← your libraries (create with scripts/setup_library.py)
+```
+
+> **New here?** Read [`GUIDE.md`](GUIDE.md) — set up a library in one command,
+> services, first paper in/out, troubleshooting. The maintained how-to procedures
+> live in the Hermes skills `bib-rag-ingest` and `bib-rag-query` (kept current
+> with every architecture change). Historical docs: `docs/archive/`.
 
 ## What's New: Agentic RAG (v2.0)
 
@@ -163,51 +177,59 @@ Env knobs: `BIB_RAG_ZOTERO_MCP=0` forces the HTTP path;
 ## File Structure
 
 ```
-bib_rag/
-├── add_papers.py              ← Add new PDFs to the index (entry point)
-├── agentic_query.py           ← Query the agentic RAG system (entry point)
-├── CONTEXT.md                 ← Domain glossary (exact terminology)
+bib_rag/                      ← toolkit (code only; DATA lives in sibling eph_rag/, geo_rag/)
+├── GUIDE.md                    ← NEW-USER START: library setup + usage walkthrough
+├── add_papers.py               ← Add new PDFs to the active library's index (entry point)
+├── agentic_query.py            ← Query the agentic RAG system (entry point)
+├── scripts/setup_library.py    ← Scaffold + register a new library (one command)
 │
-├── scripts/                   ← Utilities & pipelines
-│   ├── meta_audit.py          ← Metadata proof-reader + genuine-info fetcher
+├── scripts/                    ← Utilities & pipelines
+│   ├── meta_audit.py           ← Metadata proof-reader + genuine-info fetcher
 │   ├── bib_to_parent_store.py · fill_meta_key_in_parent_store.py ← fill meta from My Library.bib
-│   ├── bib_utils.py           ← Shared normalization / .bib / filename helpers
-│   ├── zotero_access.py       ← Zotero access layer (MCP first, HTTP fallback)
-│   ├── test_utilities.py      ← Regression tests (no network)
+│   ├── bib_utils.py            ← Shared normalization / .bib / filename helpers
+│   ├── zotero_access.py        ← Zotero access layer (MCP first, HTTP fallback)
+│   ├── test_utilities.py       ← Regression tests (no network)
 │   ├── classify_all.py · classify_demo.py · apply_tags.py · migrate_topics.py ← LLM classification pipeline
-│   └── classify_cadherin*.py · backfill_cadherin.py · batch_index_cadherin.py · retry_index_cadherin.py ← Cadherin corpus ingestion
+│   └── (classify_cadherin*.py · backfill_cadherin.py · batch_index_cadherin.py ← eph corpus copies live in eph_rag/scripts/)
 │
-├── src/                       ← RAG library & query/writer tools
+├── src/                        ← RAG library & query/writer tools
+│   ├── kb_config.py            ← SINGLE PATH-RESOLUTION POINT: registry + BIB_RAG_* env
 │   ├── agentic_graph.py · agent_nodes.py · agent_edges.py ← LangGraph pipeline
 │   ├── agent_prompts.py · agent_schemas.py · agent_tools.py ← prompts / state / retrieval tools
 │   ├── build_hierarchical_gpu.py · build_hierarchical.py · index_single_paper.py · chunking.py ← index build
-│   ├── query_bib_rag.py       ← Quick semantic search & citations
+│   ├── query_bib_rag.py        ← Quick semantic search & citations
 │   ├── bib_rag_writer.py · bib_rag_writer_debate.py · bib_rag_grill.py ← writers with citations
 │   ├── parent_store_manager.py ← Parent chunk loader
 │   └── evaluate.py · test_comprehensive.py · test_agentic_graph.py ← eval & tests
 │
-├── docs/                      ← Guides (QUICK_START, USAGE, ZOTERO_MCP_USAGE, …)
-├── data/                      ← Checkpoints & audit reports (gitignored)
-├── outputs/                   ← Generated reports (gitignored)
-├── chroma_db_new/             ← Vector database (gitignored)
-├── parent_store/              ← Parent chunks, JSON (gitignored)
-└── archive/                   ← Obsolete experiments (gitignored)
+├── docs/                       ← README.md (index) + archive/ (historical 2026-03→06, obsolete systems)
+│
+└── .gitignore                  ← libraries (eph_rag/, data dirs) never enter this repo
 ```
+
+**Library folder layout** (created by `scripts/setup_library.py`, e.g. `eph_rag/`):
+`chroma_db_new/` (vectors) · `parent_store/` + `parent_store_disabled/` (full-text
+JSON) · `data/` (checkpoints) · `outputs/` (tag CSVs) · `CONTEXT.md` (domain
+glossary) · `LIBRARY.md` (manifest) · optional `scripts/` (domain-owned batch tools).
 
 ---
 
 ## Server Setup
 
 ```bash
-# Start embedding server (bge-m3)
-bash start_llama_bge_m3.sh
+# Start embedding server (bge-m3) — -ub 2048 is REQUIRED (see Troubleshooting)
+LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-server \
+  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
+  --port 8081 -c 8192 -ngl 999 --embedding -ub 2048 &
 
-# Start LLM server
-bash llama-server_run.sh
+# LLM: cloud gateway (Ollama, port 11434) is usually already running;
+# for a local GGUF instead:
+# llama-server -m /path/to/model.gguf --port 5015 -c 524288 -ngl 999 \
+#   --flash-attn on -np 2 --cache-type-k q8_0 --cache-type-v q8_0
 
 # Both should respond:
 curl http://localhost:8081/health   # embeddings
-curl http://localhost:5015/health   # LLM
+curl http://localhost:5015/health   # LLM (only if local)
 ```
 
 ---
