@@ -6,7 +6,7 @@ Creates the graph, runs a test query about Eph receptors in neural development,
 and prints the final answer.
 
 Usage:
-    cd /Disk_bot/Eph/bib_rag
+    cd /Disk_bot/RAG/bib_rag
     python src/test_agentic_graph.py
 """
 

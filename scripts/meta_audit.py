@@ -54,12 +54,12 @@ from typing import Any, Dict, List, Optional, Tuple
 # Defaults (overridable via CLI)
 # ---------------------------------------------------------------------------
 
-DEFAULT_PARENT_DIR = Path("/Disk_bot/Eph/bib_rag/parent_store")
+DEFAULT_PARENT_DIR = Path("/Disk_bot/RAG/bib_rag/parent_store")
 DEFAULT_BIB_PATH = Path("/Disk_bot/My Library.bib")
 DEFAULT_ZOTERO_URL = "http://localhost:23119"
 DEFAULT_CROSSREF_MAILTO = "bib-rag@example.com"
-DEFAULT_DATA_DIR = Path("/Disk_bot/Eph/bib_rag/data")
-DEFAULT_OUT_DIR = Path("/Disk_bot/Eph/bib_rag/outputs")
+DEFAULT_DATA_DIR = Path("/Disk_bot/RAG/bib_rag/data")
+DEFAULT_OUT_DIR = Path("/Disk_bot/RAG/bib_rag/outputs")
 
 DATE_TAG = datetime.now().strftime("%Y-%m-%d")
 

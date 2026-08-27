@@ -23,9 +23,9 @@ from bib_utils import (
 )
 
 BIB_PATH = Path('/Disk_bot/My Library.bib')
-PARENT_STORE = Path('/Disk_bot/Eph/bib_rag/parent_store')
-BACKUP_DIR = Path('/Disk_bot/Eph/bib_rag/data/parent_store_backup_doi')
-MATCH_LOG = Path('/Disk_bot/Eph/bib_rag/data/bib_to_parent_store_log.json')
+PARENT_STORE = Path('/Disk_bot/RAG/bib_rag/parent_store')
+BACKUP_DIR = Path('/Disk_bot/RAG/bib_rag/data/parent_store_backup_doi')
+MATCH_LOG = Path('/Disk_bot/RAG/bib_rag/data/bib_to_parent_store_log.json')
 
 
 def match_paper_to_entry(paper_key, bib_entries, paper_abstract_norm=''):

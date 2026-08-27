@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Retry indexing for Cadherin md files not yet in ChromaDB (after embed retry fix)."""
 import os, sys, time
-sys.path.insert(0, '/Disk_bot/Eph/bib_rag/src')
+sys.path.insert(0, '/Disk_bot/RAG/bib_rag/src')
 import chromadb
 from index_single_paper import index_paper
 from kb_config import get_config

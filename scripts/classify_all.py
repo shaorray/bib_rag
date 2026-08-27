@@ -21,13 +21,13 @@ import time
 
 import chromadb
 
-sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
 from kb_config import get_config
 
 _CFG = get_config()
 CHROMA_DB_PATH = _CFG["chroma_path"]
 COLLECTION = _CFG["collection_name"]
-OUT_DIR = "/Disk_bot/Eph/bib_rag/outputs"
+OUT_DIR = "/Disk_bot/RAG/bib_rag/outputs"
 LOCAL_URL = "http://localhost:5015/v1"
 LOCAL_MODEL = "/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf"
 CLOUD_URL = "http://localhost:11434/v1"

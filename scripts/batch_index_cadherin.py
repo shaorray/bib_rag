@@ -4,7 +4,7 @@ Batch-index all Cadherin markdown papers into bib_rag ChromaDB via
 src/index_single_paper.index_paper(). Skips files already in the checkpoint.
 """
 import os, sys, time
-sys.path.insert(0, '/Disk_bot/Eph/bib_rag/src')
+sys.path.insert(0, '/Disk_bot/RAG/bib_rag/src')
 from index_single_paper import index_paper
 
 MD_DIR = "/Disk_bot/Eph/Cadherin_papers/md"

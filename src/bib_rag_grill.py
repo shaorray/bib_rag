@@ -45,7 +45,7 @@ from odf.opendocument import OpenDocumentText
 from odf.text import P, H
 
 # === Paths ===
-BIB_RAG_ROOT = Path("/Disk_bot/Eph/bib_rag")
+BIB_RAG_ROOT = Path("/Disk_bot/RAG/bib_rag")
 CONTEXT_PATH = BIB_RAG_ROOT / "CONTEXT.md"
 SPEC_DIR = Path("/tmp/bib_rag_grill_specs")
 SPEC_DIR.mkdir(exist_ok=True)

@@ -16,7 +16,7 @@ import time
 
 import chromadb
 
-sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
 from kb_config import get_config
 
 _CFG = get_config()

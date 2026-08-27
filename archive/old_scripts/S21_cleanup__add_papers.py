@@ -25,7 +25,7 @@ from pathlib import Path
 PAPER_LIB = Path("/Disk_bot/paper_lib/My Library")
 PDF_DIR = PAPER_LIB / "pdf"
 MD_DIR = PAPER_LIB / "md"
-BIB_RAG_DIR = Path("/Disk_bot/Eph/bib_rag")
+BIB_RAG_DIR = Path("/Disk_bot/RAG/bib_rag")
 
 
 def run_extract(pdf_path):

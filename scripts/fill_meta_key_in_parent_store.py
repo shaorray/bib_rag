@@ -37,10 +37,10 @@ from pathlib import Path
 
 from bib_utils import normalize_doi
 
-PARENT_DIR = "/Disk_bot/Eph/bib_rag/parent_store"
+PARENT_DIR = "/Disk_bot/RAG/bib_rag/parent_store"
 BIB_PATH = "/Disk_bot/My Library.bib"
-OUT_DIR = "/Disk_bot/Eph/bib_rag/outputs"
-DATA_DIR = "/Disk_bot/Eph/bib_rag/data"
+OUT_DIR = "/Disk_bot/RAG/bib_rag/outputs"
+DATA_DIR = "/Disk_bot/RAG/bib_rag/data"
 
 # ----------------------------- helpers -----------------------------
 
