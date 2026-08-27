@@ -3,13 +3,12 @@
 Academic bibliography RAG toolkit for evidence-based writing. One toolkit,
 many libraries:
 
-```
-/Disk_bot/RAG/
-├── bib_rag/   ← HERE: the toolkit (code only, this repo)
-├── eph_rag/   ← Eph-ephrin library (default; collection bib_rag_papers, ~470K chunks)
-├── geo_rag/   ← geology/renewables library
-└── <name>_rag/ ← your libraries (create with scripts/setup_library.py)
-```
+- **this repo** — the toolkit (code only: `src/`, `scripts/`, `docs/`)
+- **libraries** — one self-describing data folder per domain, each with its own
+  ChromaDB (`chroma_db_new/`), full-text store (`parent_store/`), checkpoints
+  (`data/`), tags (`outputs/`), and a `LIBRARY.md` manifest. Create yours with
+  `scripts/setup_library.py`; the toolkit serves any of them via
+  `BIB_RAG_KB_NAME` (or the per-library command it generates).
 
 > **New here?** Read [`GUIDE.md`](GUIDE.md). The maintained how-to procedures
 > live in the Hermes skills `bib-rag-ingest` and `bib-rag-query`. Historical
@@ -20,7 +19,7 @@ many libraries:
 ## Quick Start
 
 ```bash
-cd /Disk_bot/RAG/bib_rag
+cd <this repo>
 
 # 0. Prerequisites — embedding server (REQUIRED for index + query):
 LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-server \
@@ -29,27 +28,27 @@ LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-se
 curl http://localhost:8081/health          # → {"status":"ok"}
 
 # 1. Create a library (one command: folders + manifest + registry + wrapper)
-/usr/bin/python3.10 -B scripts/setup_library.py --name mytopic_rag \
+/usr/bin/python3.10 -B scripts/setup_library.py --name <name>_rag \
     --domain "your domain" --wrapper yes --no-interactive
 
 # 2. Index a paper
-mytopic-rag src/index_single_paper.py /path/to/paper.md
+<name>-rag src/index_single_paper.py /path/to/paper.md
 
 # 3. Query it
-mytopic-rag src/query_bib_rag.py "distinctive phrase from the paper"
+<name>-rag src/query_bib_rag.py "distinctive phrase from the paper"
 
 # 4. Batch-add PDFs (extracts PDF→md, then indexes incrementally)
-mytopic-rag add_papers.py /path/to/pdf/dir/
+<name>-rag add_papers.py /path/to/pdf/dir/
 
 # 5. Delete a paper (dry-run by default)
-mytopic-rag scripts/remove_paper.py paper_stem.md --apply
+<name>-rag scripts/remove_paper.py paper_stem.md --apply
 
 # 6. Agentic Q&A over the library
-mytopic-rag agentic_query.py "What do my papers say about X?"
+<name>-rag agentic_query.py "What do my papers say about X?"
 ```
 
-Existing libraries: use `eph-rag ...` or `geo-rag ...` instead of `mytopic-rag`.
-(`bib-rag` is a deprecated alias for `eph-rag`.)
+`<name>-rag` is the per-library command the setup script generates (it pins
+the library and sets up the Python environment).
 
 > **Python**: always `/usr/bin/python3.10 -B` — the wrappers set this plus the
 > `PYTHONPATH` fix chromadb needs. Bare `python3` is a pyenv shim without deps.
@@ -62,18 +61,18 @@ Existing libraries: use `eph-rag ...` or `geo-rag ...` instead of `mytopic-rag`.
 
 # Scripted:
 /usr/bin/python3.10 -B scripts/setup_library.py \
-    --name neuro_rag \
-    --domain "neuroscience / axon guidance" \
+    --name <name>_rag \
+    --domain "your domain" \
     --wrapper yes --no-interactive
 ```
 
-This creates `/Disk_bot/RAG/neuro_rag/` (`chroma_db_new/`, `parent_store/`,
-`data/`, `outputs/`, `md/`), writes `LIBRARY.md` + `CONTEXT.md`, registers it
-in `src/kb_config.py`, and emits the `neuro-rag` command. Library names are
+This creates the library folder (`chroma_db_new/`, `parent_store/`, `data/`,
+`outputs/`, `md/`), writes `LIBRARY.md` + `CONTEXT.md`, registers it in
+`src/kb_config.py`, and emits the `<name>-rag` command. Library names are
 `snake_case` ending in `_rag`; the Chroma collection defaults to `<stem>_papers`.
 
 Switch libraries any time — each wrapper pins its own library, or use
-`BIB_RAG_KB_NAME=geo_rag <command>` per-call (never `export BIB_RAG_ROOT` — it
+`BIB_RAG_KB_NAME=<other>_rag <command>` per-call (never `export BIB_RAG_ROOT` — it
 leaks across calls and silently writes into the wrong library).
 
 ## Indexing papers
@@ -93,12 +92,12 @@ eph-rag src/query_bib_rag.py "<distinctive phrase>" --top 3
 
 ```bash
 # PDFs → markdown → index (incremental; skips already-indexed papers)
-eph-rag add_papers.py /path/to/new/pdfs/
-eph-rag add_papers.py /path/to/md/ --skip-extract   # already markdown
-eph-rag add_papers.py /path/to/pdfs/ --batch-size 5 # smaller batches
+<name>-rag add_papers.py /path/to/new/pdfs/
+<name>-rag add_papers.py /path/to/md/ --skip-extract   # already markdown
+<name>-rag add_papers.py /path/to/pdfs/ --batch-size 5 # smaller batches
 
 # Verify a specific paper landed:
-eph-rag src/query_bib_rag.py "<phrase unique to the new paper>" --top 3
+<name>-rag src/query_bib_rag.py "<phrase unique to the new paper>" --top 3
 ```
 
 Downloads land in the library's `md/` by default; keep PDFs durably (never /tmp).
@@ -107,13 +106,13 @@ Downloads land in the library's `md/` by default; keep PDFs durably (never /tmp)
 
 ```bash
 # Dry-run (default) — shows exactly what matches, deletes nothing:
-eph-rag scripts/remove_paper.py 10087273.md
+<name>-rag scripts/remove_paper.py <paper>.md
 
 # By filename substring:
-eph-rag scripts/remove_paper.py --match Salvucci
+<name>-rag scripts/remove_paper.py --match <author>
 
 # Actually delete (chroma chunks + parent_store JSON + checkpoint/metadata entries):
-eph-rag scripts/remove_paper.py 10087273.md --apply
+<name>-rag scripts/remove_paper.py <paper>.md --apply
 ```
 
 Deletion removes the paper completely — re-index the same md any time to bring
@@ -258,7 +257,7 @@ Env knobs: `BIB_RAG_ZOTERO_MCP=0` forces the HTTP path;
 ## File Structure
 
 ```
-bib_rag/                      ← toolkit (code only; DATA lives in sibling eph_rag/, geo_rag/)
+bib_rag/                      ← toolkit (code only; DATA lives in sibling library folders)
 ├── GUIDE.md                    ← NEW-USER START: library setup + usage walkthrough
 ├── add_papers.py               ← Add new PDFs to the active library's index (entry point)
 ├── agentic_query.py            ← Query the agentic RAG system (entry point)
@@ -271,7 +270,7 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling eph_
 │   ├── zotero_access.py        ← Zotero access layer (MCP first, HTTP fallback)
 │   ├── test_utilities.py       ← Regression tests (no network)
 │   ├── classify_all.py · classify_demo.py · apply_tags.py · migrate_topics.py ← LLM classification pipeline
-│   └── (classify_cadherin*.py · backfill_cadherin.py · batch_index_cadherin.py ← eph corpus copies live in eph_rag/scripts/)
+│   └── (domain-specific batch tools also live in each library's scripts/ folder)
 │
 ├── src/                        ← RAG library & query/writer tools
 │   ├── kb_config.py            ← SINGLE PATH-RESOLUTION POINT: registry + BIB_RAG_* env
@@ -285,10 +284,10 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling eph_
 │
 ├── docs/                       ← README.md (index) + archive/ (historical 2026-03→06, obsolete systems)
 │
-└── .gitignore                  ← libraries (eph_rag/, data dirs) never enter this repo
+└── .gitignore                  ← library folders / data dirs never enter this repo
 ```
 
-**Library folder layout** (created by `scripts/setup_library.py`, e.g. `eph_rag/`):
+**Library folder layout** (created by `scripts/setup_library.py`):
 `chroma_db_new/` (vectors) · `parent_store/` + `parent_store_disabled/` (full-text
 JSON) · `data/` (checkpoints) · `outputs/` (tag CSVs) · `CONTEXT.md` (domain
 glossary) · `LIBRARY.md` (manifest) · optional `scripts/` (domain-owned batch tools).

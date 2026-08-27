@@ -1,20 +1,19 @@
 # GUIDE — Setting up a RAG library with the bib_rag toolkit
 
 This repo is the **toolkit** (code only). Your papers live in **libraries** —
-self-describing data folders under `/Disk_bot/RAG/`. One toolkit, many libraries.
+self-describing data folders under a common RAG root. One toolkit, many libraries.
 
 ```
-/Disk_bot/RAG/
-├── bib_rag/   ← you are here (CODE: src/, scripts/, docs/)
-├── eph_rag/   ← Eph-ephrin library (default; collection bib_rag_papers, ~470K chunks)
-├── geo_rag/   ← geology/renewables library
-└── <your>_rag/ ← create yours in 1 command (below)
+<RAG root>/
+├── bib_rag/        ← the toolkit (CODE: src/, scripts/, docs/) — this repo
+├── <name>_rag/     ← one data folder per domain (created in 1 command, below)
+└── ...
 ```
 
 ## Quick start (2 minutes)
 
 ```bash
-cd /Disk_bot/RAG/bib_rag
+cd <this repo>
 /usr/bin/python3.10 -B scripts/setup_library.py
 ```
 
@@ -23,20 +22,20 @@ defaults. Fully scripted alternative:
 
 ```bash
 /usr/bin/python3.10 -B scripts/setup_library.py \
-    --name neuro_rag \
+    --name <name>_rag \
     --domain "neuroscience / axon guidance" \
     --wrapper yes --no-interactive
 ```
 
 One command does all of:
-1. Creates `/Disk_bot/RAG/neuro_rag/` with `chroma_db_new/`, `parent_store/`,
+1. Creates `<RAG root>/<name>_rag/` with `chroma_db_new/`, `parent_store/`,
    `parent_store_disabled/`, `data/`, `outputs/`, `md/`
 2. Writes `LIBRARY.md` (manifest) + `CONTEXT.md` (domain glossary starter)
 3. Registers the library in `src/kb_config.py` (`_KB_REGISTRY`: root + collection,
    brace-counted patch with post-write sanity checks — cannot clobber the file)
 4. Emits a `neuro-rag` wrapper in `~/.local/bin/` (name = library name minus `_rag`)
 
-Naming rule: library names are `snake_case` ending in `_rag` (neuro_rag, eph_rag...).
+Naming rule: library names are `snake_case` ending in `_rag`.
 The Chroma collection defaults to `<stem>_papers` (neuro_papers).
 
 Safety: the script refuses to touch a directory that holds real data without a
@@ -69,7 +68,7 @@ shadowing issue that breaks chromadb imports.
 # 1. markdown paper somewhere durable (convert PDFs with pymupdf4llm; never /tmp)
 # 2. index:
 neuro-rag src/index_single_paper.py /path/to/paper.md
-#    → chunks, embeds via 8081, stores into neuro_rag/chroma_db_new
+#    → chunks, embeds via 8081, stores into <name>_rag/chroma_db_new
 
 # 3. query it back:
 neuro-rag src/query_bib_rag.py "distinctive phrase from that paper" --top 3
@@ -87,7 +86,7 @@ neuro-rag add_papers.py /path/to/pdf/dir/
    Feed title+abstract, not title alone — titles miss method papers.
 4. **Apply tags**: `neuro-rag scripts/apply_tags.py outputs/<name>_tags.csv`
    (writes `article_type` + `topic_<kw>:1` keys into chunk metadata).
-5. **Fill in** `neuro_rag/CONTEXT.md` with your domain vocabulary — the
+5. **Fill in** `<name>_rag/CONTEXT.md` with your domain vocabulary — the
    writer/grill/agentic tools read it to constrain generation.
 
 Full procedures + pitfalls: Hermes skills `bib-rag-ingest` (write side) and
