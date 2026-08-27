@@ -20,7 +20,7 @@ check it before copying code examples.
 
 ## archive/ — obsolete systems (do not follow)
 
-Files describing the OLD `ephrin_agentic_rag` system (`rag_core.py`,
-`SimpleEmbedding`, `academic_writer.py`, `query_v2/v3_kb`) that lived at
-`/Disk_2/claw_working_dir/`, plus completed one-off cleanup/inventory reports.
-None of those modules exist in this toolkit. Historical provenance only.
+Files describing an earlier, separate prototype system (different module
+names, different storage locations) plus completed one-off cleanup/inventory
+reports. None of those modules exist in this toolkit. Historical provenance
+only — do not follow code examples.
