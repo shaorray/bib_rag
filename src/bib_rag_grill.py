@@ -54,11 +54,7 @@ CONTEXT_PATH = BIB_RAG_ROOT / "CONTEXT.md"
 SPEC_DIR = Path("/tmp/bib_rag_grill_specs")
 SPEC_DIR.mkdir(exist_ok=True)
 
-# === API endpoints (shared with bib_rag_writer.py) ===
-# ─── Multi-KB config ─────────────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kb_config import get_config
-_CFG = get_config()
+# === API endpoints (shared with kb_config) ===
 BIB_RAG_EMBED_URL = _CFG["embed_url"]
 ZOTERO_BASE = "http://localhost:23119/api/users/0"
 CHROMA_PATH = _CFG["chroma_path"]

@@ -13,6 +13,19 @@ Chunking config lives here so every caller uses the same sizes.
 import os
 import re
 import json
+
+
+def atomic_json_dump(obj, path):
+    """Write JSON atomically: temp file + os.replace, so a crash mid-write
+    never leaves a truncated file (truncated checkpoints brick resume)."""
+    path = str(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 import hashlib
 from pathlib import Path
 
@@ -203,7 +216,6 @@ def save_parent_store(parents, source, parent_store_dir):
     safe_name = re.sub(r'[^\w\-]', '_', source)[:100]
     filepath = os.path.join(parent_store_dir, f"{safe_name}.json")
 
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(parents, f, ensure_ascii=False, indent=2)
+    atomic_json_dump(parents, filepath)
 
     return filepath

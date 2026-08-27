@@ -21,7 +21,7 @@ Prerequisites:
 Options:
   --skip-extract    Skip PDF→MD extraction (use if markdown already exists)
   --batch-size      Build batch size (default 50)
-  --papers-dir      Target markdown directory (default: /Disk_bot/paper_lib/My Library/md)
+  --papers-dir      Target markdown directory (default: <active library>/md)
   --verify QUERY    After adding, run a test query to verify
   --dry-run         Show what would be done without executing
 """
@@ -44,7 +44,9 @@ _argv = parse_kb_arg()
 _CFG = get_config()
 CODE_ROOT = Path(_CFG["code_root"])
 KB_ROOT = Path(_CFG["data_root"])  # data dir (chroma, parent_store) for display
-DEFAULT_PAPERS_DIR = Path("/Disk_bot/paper_lib/My Library/md")
+# Per-library papers dir (setup_library scaffolds <library>/md/); the shared
+# Zotero-derived corpus remains available via explicit --papers-dir.
+DEFAULT_PAPERS_DIR = KB_ROOT / "md"
 QUERY_SCRIPT = CODE_ROOT / "src" / "query_bib_rag.py"
 
 # Indexing is done by src/index_single_paper.py (uses llama-server embedding on

@@ -110,32 +110,6 @@ def embed_query(text: str) -> List[float]:
 def search(query: str, top_k: int = 5) -> List[Dict]:
     """Semantic search in ChromaDB."""
     emb = embed_query(query)
-    
-    conn = sqlite3.connect(CHROMA_PATH)
-    c = conn.cursor()
-    
-    # Get all embeddings with metadata
-    # Chroma stores: embeddings(id, segment_id, embedding_id, seq_id)
-    # We need to join with embedding_metadata
-    c.execute("""
-        SELECT e.id, emd.string_value as doc
-        FROM embeddings e
-        JOIN embedding_metadata emd ON e.id = emd.id AND emd.key = '#document'
-        LIMIT 10000
-    """)
-    
-    # Simple L2 distance computation in Python
-    results = []
-    for row in c.fetchall():
-        emb_id, doc = row
-        # Get the embedding vector from the embeddings table
-        # Actually chroma stores embeddings in a separate binary format
-        # Let's use a simpler approach - query the fulltext search + metadata
-        pass
-    
-    conn.close()
-    
-    # Better: use Chroma's native query via langchain
     return native_chroma_search(query, emb, top_k)
 
 

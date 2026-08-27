@@ -343,7 +343,8 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
         tbn = (total - 1) // batch_size + 1
         
         all_children = []  # All child chunks for this batch
-        batch_metas = {}   # Per-paper metadata for incremental_metadata.json
+        batch_metas = {}
+        children_so_far = 0   # Per-paper metadata for incremental_metadata.json
         child_metas = []   # Per-child metadata for ChromaDB batch insert
         
         for i, fp in enumerate(files, batch_start + 1):
@@ -415,13 +416,13 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
                     all_children.extend(children)
                 
                 # Track children count per paper for metadata
-                paper_children = len(all_children) - batch_metas.get('_children_so_far', 0)
+                paper_children = len(all_children) - children_so_far
                 batch_metas[fp.name] = {
                     **meta, 'hash': ch,
                     'parents': len(parents),
                     'children': paper_children
                 }
-                batch_metas['_children_so_far'] = len(all_children)
+                children_so_far = len(all_children)
                 
                 checkpoint['processed'].add(fp.name)
                 stats['success'] += 1
@@ -435,23 +436,29 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
         if all_children:
             print(f"\n[{bn}/{tbn}] Embedding {len(all_children)} child chunks via GPU...")
             
-            # Batch embed
-            embeddings = []
+            # Batch embed — pair each batch with its children so a failed batch
+            # drops ITS OWN children (not the tail); storing a child under another
+            # chunk's embedding permanently corrupts retrieval for both.
             texts_to_embed = [c['text'] for c in all_children]
+            aligned = []  # (child, embedding) pairs that embedded successfully
             
             for i in range(0, len(texts_to_embed), BATCH_EMBED_SIZE):
+                batch_slice = slice(i, i + BATCH_EMBED_SIZE)
                 batch_texts = texts_to_embed[i:i+BATCH_EMBED_SIZE]
                 batch_embs = embed_batch(batch_texts)
-                embeddings.extend(batch_embs)
                 
-                if not batch_embs:
-                    print(f"   ⚠️  Failed to embed batch {i//BATCH_EMBED_SIZE + 1}")
+                if not batch_embs or len(batch_embs) != len(batch_texts):
+                    print(f"   ⚠️  Failed to embed batch {i//BATCH_EMBED_SIZE + 1} "
+                          f"({len(batch_texts)} children) — skipped")
+                    stats['failed'] += len(batch_texts)
+                    continue
+                aligned.extend(zip(all_children[i:i+BATCH_EMBED_SIZE], batch_embs))
             
-            if len(embeddings) != len(all_children):
-                print(f"   ❌ Embedding mismatch: {len(embeddings)}/{len(all_children)}")
-                stats['failed'] += len(all_children) - len(embeddings)
-                # Only store successfully embedded
-                all_children = all_children[:len(embeddings)]
+            if len(aligned) != len(all_children):
+                print(f"   ❌ Embedding mismatch: {len(aligned)}/{len(all_children)} stored")
+            
+            all_children = [c for c, _ in aligned]
+            embeddings = [e for _, e in aligned]
             
             # Store in ChromaDB — batch insert to reduce RAM (ChromaDB's internal buffering)
             try:
@@ -495,13 +502,13 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
                 print(f"   ❌ ChromaDB store failed: {str(e)[:80]}")
                 stats['failed'] += len(all_children)
         
-        # Save checkpoint
-        with open(CHECKPOINT_FILE, 'w') as f:
-            json.dump({'processed': list(checkpoint['processed']), 'last_batch': bn}, f)
+        # Save checkpoint (atomic — truncated checkpoint bricks resume)
+        from chunking import atomic_json_dump
+        atomic_json_dump({'processed': list(checkpoint['processed']), 'last_batch': bn},
+                         CHECKPOINT_FILE)
         
         metadata.update(batch_metas)
-        with open(METADATA_LOG, 'w') as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        atomic_json_dump(metadata, METADATA_LOG)
         
         # Progress
         elapsed = time.time() - start_time

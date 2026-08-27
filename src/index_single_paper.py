@@ -9,6 +9,7 @@ from langchain_community.vectorstores import Chroma
 
 # Shared chunking logic (single source of truth) — same dir as this script
 from chunking import (
+    atomic_json_dump,
     clean_text, truncate_at_references, extract_meta,
     extract_sections, split_into_paragraphs,
     create_child_chunks, create_parent_chunks, save_parent_store,
@@ -164,8 +165,7 @@ def index_paper(md_path):
         cp = {'processed': [], 'last_batch': 0}
     if md_path.name not in cp['processed']:
         cp['processed'].append(md_path.name)
-    with open(CHECKPOINT_FILE, 'w') as f:
-        json.dump(cp, f, indent=2)
+    atomic_json_dump(cp, CHECKPOINT_FILE)
 
     # Update metadata
     if os.path.exists(METADATA_LOG):
@@ -175,8 +175,7 @@ def index_paper(md_path):
         metadata_log = {}
     metadata_log[md_path.name] = {**meta, 'hash': hashlib.md5(cleaned.encode()).hexdigest()[:16],
                                    'parents': len(parents), 'children': len(all_children)}
-    with open(METADATA_LOG, 'w') as f:
-        json.dump(metadata_log, f, ensure_ascii=False, indent=2)
+    atomic_json_dump(metadata_log, METADATA_LOG)
 
     print(f"\n✅ Done! {len(parents)} parents, {len(all_children)} children indexed.")
     return True

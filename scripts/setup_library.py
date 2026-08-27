@@ -132,7 +132,12 @@ def patch_registry(name: str, root: str, collection: str) -> bool:
         if must not in new:
             sys.exit(f"ERROR: patched file lost '{must}' — aborting without write. "
                      f"Fix _KB_REGISTRY manually in {KB_CONFIG}.")
-    KB_CONFIG.write_text(new)
+    # atomic write: backup + temp + os.replace (a truncated kb_config.py bricks
+    # every tool — this file is the single path-resolution point)
+    KB_CONFIG.with_suffix(".py.bak").write_text(s)
+    tmp = KB_CONFIG.with_suffix(".py.tmp")
+    tmp.write_text(new)
+    os.replace(tmp, KB_CONFIG)
     return True
 
 

@@ -189,7 +189,7 @@ def main():
         if "error" in got:
             errs += len(batch)
             for p in batch:
-                writer.writerow({"source": p[0], "year": p[1], "title": p[1],
+                writer.writerow({"source": p[0], "year": p[2], "title": p[1],
                                  "article_type": "ERROR", "topics": got["error"][:200]})
             fh.flush()
             continue
@@ -204,7 +204,7 @@ def main():
                 x = str(x).strip().lower()
                 if x and x not in seen_tp:
                     seen_tp.append(x)
-            writer.writerow({"source": p[0], "year": p[1], "title": p[1],
+            writer.writerow({"source": p[0], "year": p[2], "title": p[1],
                              "article_type": at, "topics": json.dumps(seen_tp[:5])})
             done += 1
         fh.flush()

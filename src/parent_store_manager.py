@@ -19,9 +19,10 @@ PARENT_STORE_DIR = _CFG["parent_store_dir"]
 class ParentStoreManager:
     """Manages parent chunk JSON files."""
     
-    def __init__(self, store_dir: str = PARENT_STORE_DIR):
+    def __init__(self, store_dir: str = PARENT_STORE_DIR, create: bool = False):
         self.store_dir = store_dir
-        os.makedirs(store_dir, exist_ok=True)
+        if create:
+            os.makedirs(store_dir, exist_ok=True)
     
     def load_content(self, parent_id: str) -> Optional[Dict]:
         """Load a single parent chunk by its parent_id."""
