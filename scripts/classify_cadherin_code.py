@@ -27,12 +27,12 @@ LOCAL_URL = "http://localhost:5015/v1"
 LOCAL_MODEL = "/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf"
 CLOUD_URL = "http://localhost:11434/v1"
 CLOUD_MODEL = "glm-5.2:cloud"
-OUT_DIR = _CFG["outputs_dir"]
 
 sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
 from kb_config import get_config
 
 _CFG = get_config()
+OUT_DIR = _CFG["outputs_dir"]
 from index_single_paper import clean_text, truncate_at_references, extract_meta
 
 TOPIC_EXAMPLES = [

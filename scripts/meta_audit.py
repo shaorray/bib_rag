@@ -49,6 +49,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import sys
 
 sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
 from kb_config import get_config
