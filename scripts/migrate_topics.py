@@ -16,7 +16,12 @@ import time
 
 import chromadb
 
-CHROMA_DB_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
+sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+from kb_config import get_config
+
+_CFG = get_config()
+CHROMA_DB_PATH = _CFG["chroma_path"]
+COLLECTION = _CFG["collection_name"]
 
 
 def norm(kw: str) -> str:
@@ -30,7 +35,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    col = chromadb.PersistentClient(path=CHROMA_DB_PATH).get_collection("bib_rag_papers")
+    col = chromadb.PersistentClient(path=CHROMA_DB_PATH).get_collection(COLLECTION)
     t0 = time.time()
     updated = 0
     skipped = 0

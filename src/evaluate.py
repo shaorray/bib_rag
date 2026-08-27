@@ -24,6 +24,10 @@ from src.agentic_graph import create_agent_graph
 from src.agent_tools import create_tools
 import chromadb
 
+from src.kb_config import get_config
+
+_CFG = get_config()
+
 
 def agentic_answer(query, graph):
     """Full agentic pipeline."""
@@ -42,8 +46,8 @@ def baseline_answer(query, llm):
     start = time.time()
     
     # Direct ChromaDB query
-    client = chromadb.PersistentClient(path="chroma_db_new")
-    coll = client.get_collection("bib_rag_papers")
+    client = chromadb.PersistentClient(path=_CFG["chroma_path"])
+    coll = client.get_collection(_CFG["collection_name"])
     
     # Get embedding from llama-server
     import requests

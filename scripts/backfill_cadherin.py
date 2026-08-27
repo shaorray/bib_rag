@@ -24,7 +24,12 @@ import time
 
 import chromadb
 
-CHROMA_DB_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
+sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+from kb_config import get_config
+
+_CFG = get_config()
+CHROMA_DB_PATH = _CFG["chroma_path"]
+COLLECTION = _CFG["collection_name"]
 
 
 def load_labeled(path):
@@ -78,7 +83,7 @@ def main():
     tags = load_tags(args.tags)
     print(f"labeled: {len(labeled)} pmids, tags: {len(tags)} sources")
 
-    col = chromadb.PersistentClient(path=CHROMA_DB_PATH).get_collection("bib_rag_papers")
+    col = chromadb.PersistentClient(path=CHROMA_DB_PATH).get_collection(COLLECTION)
     t0 = time.time()
     updated = 0
     matched_sources = 0

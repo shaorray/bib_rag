@@ -13,13 +13,17 @@ Usage:
     parent = tools.retrieve_parent_chunks("parent_id_here")
 """
 
-import os
+import os, sys
 import requests
 from typing import List, Dict, Optional
-from src.parent_store_manager import ParentStoreManager
 
-CHROMA_DB_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
-BIB_RAG_EMBED_URL = "http://localhost:8081/v1/embeddings"
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kb_config import get_config
+from parent_store_manager import ParentStoreManager
+_CFG = get_config()
+CHROMA_DB_PATH = _CFG["chroma_path"]
+BIB_RAG_EMBED_URL = _CFG["embed_url"]
 
 # --- Tool output budgets ---------------------------------------------------
 # The agent subgraph re-prefills the WHOLE message history on every iteration.
@@ -69,7 +73,7 @@ class ToolFactory:
             self.db = Chroma(
                 persist_directory=CHROMA_DB_PATH,
                 embedding_function=Dummy(),
-                collection_name="bib_rag_papers"
+                collection_name=_CFG["collection_name"],
             )
             self.collection = self.db._collection
         else:

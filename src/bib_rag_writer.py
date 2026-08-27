@@ -19,8 +19,12 @@ from odf.text import P, H
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import zotero_access  # noqa: E402
 
-BIB_RAG_EMBED_URL = "http://localhost:8081/v1/embeddings"
-CHROMA_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kb_config import get_config
+_CFG = get_config()
+BIB_RAG_EMBED_URL = _CFG["embed_url"]
+CHROMA_PATH = _CFG["chroma_path"]
 
 
 def embed_query(text: str) -> List[float]:
@@ -49,8 +53,8 @@ def search_bib_rag(query: str, top_k: int = 5) -> List[Dict]:
     
     db = Chroma(
         persist_directory=CHROMA_PATH,
+        collection_name=_CFG["collection_name"],
         embedding_function=PrecomputedEmbed(emb),
-        collection_name="bib_rag_papers"
     )
     
     docs = db._collection.query(

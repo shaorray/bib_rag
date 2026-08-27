@@ -7,10 +7,24 @@ Uses llama-server bge-m3 (port 8081) + ChromaDB
 import sys, requests, sqlite3, json, os
 from typing import List, Dict
 
-CHROMA_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new/chroma.sqlite3"
-EMBED_URL = "http://localhost:8081/v1/embeddings"
-PARENT_STORE_DIR_PRIMARY   = "/Disk_bot/Eph/bib_rag/parent_store"
-PARENT_STORE_DIR_DISABLED  = "/Disk_bot/Eph/bib_rag/parent_store_disabled"
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+# Supports BIB_RAG_ROOT env var and --kb flag for switching knowledge bases.
+# Default: bib_rag (Eph-ephrin). Use --kb geo_rag for geology papers.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kb_config import get_config, parse_kb_arg, print_config
+
+# Strip --kb from argv before legacy arg parsing
+_argv = parse_kb_arg()
+if _argv:
+    sys.argv = [sys.argv[0]] + _argv
+
+_CFG = get_config()
+CHROMA_PATH = _CFG["chroma_sqlite"]
+EMBED_URL = _CFG["embed_url"]
+PARENT_STORE_DIR_PRIMARY = _CFG["parent_store_dir"]
+PARENT_STORE_DIR_DISABLED = _CFG["parent_store_disabled_dir"]
+_CHROMA_DIR = _CFG["chroma_path"]
+_COLLECTION = _CFG["collection_name"]
 
 
 def _load_parent_with_fallback(parent_id: str):
@@ -23,7 +37,7 @@ def _load_parent_with_fallback(parent_id: str):
     if not parent_id:
         return None
     try:
-        sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from parent_store_manager import ParentStoreManager
     except Exception:
         return None
@@ -139,9 +153,9 @@ def native_chroma_search(query: str, embedding: List[float], top_k: int = 5):
             return self.emb
     
     db = Chroma(
-        persist_directory="/Disk_bot/Eph/bib_rag/chroma_db_new",
+        persist_directory=_CHROMA_DIR,
         embedding_function=PrecomputedEmbed(embedding),
-        collection_name="bib_rag_papers"
+        collection_name=_COLLECTION
     )
     
     # Use similarity_search_by_vector
@@ -232,22 +246,21 @@ def cite_mode(claim: str, top_k: int = 5):
 
 
 def main():
-    if len(sys.argv) < 1:
-        print("""
-📚 bib_rag Query Tool
+    if len(sys.argv) < 2:
+        print(f"""
+📚 {_CFG['kb_name']} Query Tool
 Usage:
   python3 query_bib_rag.py "your search query"
   python3 query_bib_rag.py --cite "claim you want evidence for"
   python3 query_bib_rag.py --cite "Eph receptors mediate axon guidance" --top 3
+  python3 query_bib_rag.py --kb geo_rag "subduction zone"
 
 Options:
   --cite    Find supporting citations for a claim
   --top N   Return top N results (default: 5)
+  --kb NAME Switch knowledge base (bib_rag, geo_rag)
 
-Examples:
-  python3 query_bib_rag.py "cis interaction mechanism"
-  python3 query_bib_rag.py "EphA4 reverse signaling"
-  python3 query_bib_rag.py --cite "Eph receptors promote tumor suppression" --top 3
+Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
         """)
         sys.exit(1)
     

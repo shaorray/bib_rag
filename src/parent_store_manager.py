@@ -6,11 +6,15 @@ Loads parent chunks from JSON files for retrieval-augmented generation.
 Used by agent_tools.py to retrieve full parent context after child chunk search.
 """
 
-import os, json, glob
+import os, sys, json, glob
 from pathlib import Path
 from typing import List, Dict, Optional
 
-PARENT_STORE_DIR = "/Disk_bot/Eph/bib_rag/parent_store"
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kb_config import get_config
+_CFG = get_config()
+PARENT_STORE_DIR = _CFG["parent_store_dir"]
 
 class ParentStoreManager:
     """Manages parent chunk JSON files."""

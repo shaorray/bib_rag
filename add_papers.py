@@ -34,15 +34,21 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-# ---- Configuration ----
-KB_ROOT = Path("/Disk_bot/Eph/bib_rag")
+# ---- Configuration (Multi-KB aware) ----
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from kb_config import get_config, parse_kb_arg
+
+# Strip --kb from argv before argparse
+_argv = parse_kb_arg()
+
+_CFG = get_config()
+KB_ROOT = Path(_CFG["kb_root"])
 DEFAULT_PAPERS_DIR = Path("/Disk_bot/paper_lib/My Library/md")
 QUERY_SCRIPT = KB_ROOT / "src" / "query_bib_rag.py"
 
 # Indexing is done by src/index_single_paper.py (uses llama-server embedding on
 # port 8081, bypassing the broken SentenceTransformers import). build_hierarchical.py
 # is retired — it depended on SentenceTransformer which no longer imports.
-sys.path.insert(0, str(KB_ROOT / "src"))
 from index_single_paper import index_paper
 
 # ---- PDF Extraction ----

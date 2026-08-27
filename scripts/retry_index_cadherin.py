@@ -4,12 +4,15 @@ import os, sys, time
 sys.path.insert(0, '/Disk_bot/Eph/bib_rag/src')
 import chromadb
 from index_single_paper import index_paper
+from kb_config import get_config
 
 MD_DIR = "/Disk_bot/Eph/Cadherin_papers/md"
-CHROMA = "/Disk_bot/Eph/bib_rag/chroma_db_new"
+_CFG = get_config()
+CHROMA = _CFG["chroma_path"]
+COLLECTION = _CFG["collection_name"]
 
 def main():
-    col = chromadb.PersistentClient(path=CHROMA).get_collection("bib_rag_papers")
+    col = chromadb.PersistentClient(path=CHROMA).get_collection(COLLECTION)
     r = col.get(include=["metadatas"])
     sources = set(m.get("source", "") for m in r["metadatas"])
     mds = [f for f in os.listdir(MD_DIR) if f.endswith(".md")]

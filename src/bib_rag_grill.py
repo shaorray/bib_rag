@@ -51,9 +51,13 @@ SPEC_DIR = Path("/tmp/bib_rag_grill_specs")
 SPEC_DIR.mkdir(exist_ok=True)
 
 # === API endpoints (shared with bib_rag_writer.py) ===
-BIB_RAG_EMBED_URL = "http://localhost:8081/v1/embeddings"
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kb_config import get_config
+_CFG = get_config()
+BIB_RAG_EMBED_URL = _CFG["embed_url"]
 ZOTERO_BASE = "http://localhost:23119/api/users/0"
-CHROMA_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
+CHROMA_PATH = _CFG["chroma_path"]
 
 # === LLM endpoints ===
 # Default: llama-server (Qwen3.6-35B-A3B on port 5015) — your primary inference.
@@ -323,8 +327,8 @@ def search_bib_rag(query: str, top_k: int = 5) -> List[Dict]:
 
     db = Chroma(
         persist_directory=CHROMA_PATH,
+        collection_name=_CFG["collection_name"],
         embedding_function=PrecomputedEmbed(emb),
-        collection_name="bib_rag_papers",
     )
     docs = db._collection.query(
         query_embeddings=[emb], n_results=top_k,

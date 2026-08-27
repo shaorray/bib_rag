@@ -27,12 +27,16 @@ import tempfile
 tempfile.tempdir = "/Disk_bot/tmp"
 os.environ["TMPDIR"] = "/Disk_bot/tmp"
 
-KB_ROOT = "/Disk_bot/Eph/bib_rag"
-CHROMA_DB_PATH = f"{KB_ROOT}/chroma_db_new"
-PARENT_STORE_DIR = f"{KB_ROOT}/parent_store"
-METADATA_LOG = f"{KB_ROOT}/data/incremental_metadata.json"
-CHECKPOINT_FILE = f"{KB_ROOT}/data/build_hierarchical_checkpoint.json"
-BIB_RAG_EMBED_URL = "http://localhost:8081/v1/embeddings"
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kb_config import get_config
+_CFG = get_config()
+KB_ROOT = _CFG["kb_root"]
+CHROMA_DB_PATH = _CFG["chroma_path"]
+PARENT_STORE_DIR = _CFG["parent_store_dir"]
+METADATA_LOG = _CFG["metadata_log"]
+CHECKPOINT_FILE = _CFG["checkpoint_file"]
+BIB_RAG_EMBED_URL = _CFG["embed_url"]
 
 # ============== Parent/Child Configuration ==============
 
@@ -316,7 +320,7 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
     db = Chroma(
         persist_directory=CHROMA_DB_PATH,
         embedding_function=Dummy(),
-        collection_name="bib_rag_papers"
+        collection_name=_CFG["collection_name"]
     )
     
     # Load metadata

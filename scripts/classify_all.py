@@ -21,7 +21,12 @@ import time
 
 import chromadb
 
-CHROMA_DB_PATH = "/Disk_bot/Eph/bib_rag/chroma_db_new"
+sys.path.insert(0, "/Disk_bot/Eph/bib_rag/src")
+from kb_config import get_config
+
+_CFG = get_config()
+CHROMA_DB_PATH = _CFG["chroma_path"]
+COLLECTION = _CFG["collection_name"]
 OUT_DIR = "/Disk_bot/Eph/bib_rag/outputs"
 LOCAL_URL = "http://localhost:5015/v1"
 LOCAL_MODEL = "/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf"
@@ -125,7 +130,7 @@ def main():
     from openai import OpenAI
     client = OpenAI(base_url=llm_url, api_key="ollama")
 
-    col = chromadb.PersistentClient(path=CHROMA_DB_PATH).get_collection("bib_rag_papers")
+    col = chromadb.PersistentClient(path=CHROMA_DB_PATH).get_collection(COLLECTION)
     r = col.get(include=["metadatas"])
     seen = {}
     for m in r["metadatas"]:
