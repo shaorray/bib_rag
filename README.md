@@ -11,12 +11,118 @@ many libraries:
 └── <name>_rag/ ← your libraries (create with scripts/setup_library.py)
 ```
 
-> **New here?** Read [`GUIDE.md`](GUIDE.md) — set up a library in one command,
-> services, first paper in/out, troubleshooting. The maintained how-to procedures
-> live in the Hermes skills `bib-rag-ingest` and `bib-rag-query` (kept current
-> with every architecture change). Historical docs: `docs/archive/`.
+> **New here?** Read [`GUIDE.md`](GUIDE.md). The maintained how-to procedures
+> live in the Hermes skills `bib-rag-ingest` and `bib-rag-query`. Historical
+> docs: `docs/archive/`.
 
-## What's New: Agentic RAG (v2.0)
+---
+
+## Quick Start
+
+```bash
+cd /Disk_bot/RAG/bib_rag
+
+# 0. Prerequisites — embedding server (REQUIRED for index + query):
+LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-server \
+  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
+  --port 8081 -c 8192 -ngl 999 --embedding -ub 2048 &
+curl http://localhost:8081/health          # → {"status":"ok"}
+
+# 1. Create a library (one command: folders + manifest + registry + wrapper)
+/usr/bin/python3.10 -B scripts/setup_library.py --name mytopic_rag \
+    --domain "your domain" --wrapper yes --no-interactive
+
+# 2. Index a paper
+mytopic-rag src/index_single_paper.py /path/to/paper.md
+
+# 3. Query it
+mytopic-rag src/query_bib_rag.py "distinctive phrase from the paper"
+
+# 4. Batch-add PDFs (extracts PDF→md, then indexes incrementally)
+mytopic-rag add_papers.py /path/to/pdf/dir/
+
+# 5. Delete a paper (dry-run by default)
+mytopic-rag scripts/remove_paper.py paper_stem.md --apply
+
+# 6. Agentic Q&A over the library
+mytopic-rag agentic_query.py "What do my papers say about X?"
+```
+
+Existing libraries: use `eph-rag ...` or `geo-rag ...` instead of `mytopic-rag`.
+(`bib-rag` is a deprecated alias for `eph-rag`.)
+
+> **Python**: always `/usr/bin/python3.10 -B` — the wrappers set this plus the
+> `PYTHONPATH` fix chromadb needs. Bare `python3` is a pyenv shim without deps.
+
+## Building a RAG library
+
+```bash
+# Interactive — prompts for name/domain with defaults:
+/usr/bin/python3.10 -B scripts/setup_library.py
+
+# Scripted:
+/usr/bin/python3.10 -B scripts/setup_library.py \
+    --name neuro_rag \
+    --domain "neuroscience / axon guidance" \
+    --wrapper yes --no-interactive
+```
+
+This creates `/Disk_bot/RAG/neuro_rag/` (`chroma_db_new/`, `parent_store/`,
+`data/`, `outputs/`, `md/`), writes `LIBRARY.md` + `CONTEXT.md`, registers it
+in `src/kb_config.py`, and emits the `neuro-rag` command. Library names are
+`snake_case` ending in `_rag`; the Chroma collection defaults to `<stem>_papers`.
+
+Switch libraries any time — each wrapper pins its own library, or use
+`BIB_RAG_KB_NAME=geo_rag <command>` per-call (never `export BIB_RAG_ROOT` — it
+leaks across calls and silently writes into the wrong library).
+
+## Indexing papers
+
+```bash
+# Single paper (chunks parent+child, embeds via 8081, stores into the active library)
+eph-rag src/index_single_paper.py /path/to/paper.md
+
+# First-time bulk build / rebuild (GPU build — incremental via checkpoint)
+eph-rag src/build_hierarchical_gpu.py --papers-dir /path/to/md/ --batch-size 50
+
+# Batch verification after indexing: check coverage
+eph-rag src/query_bib_rag.py "<distinctive phrase>" --top 3
+```
+
+## Adding papers
+
+```bash
+# PDFs → markdown → index (incremental; skips already-indexed papers)
+eph-rag add_papers.py /path/to/new/pdfs/
+eph-rag add_papers.py /path/to/md/ --skip-extract   # already markdown
+eph-rag add_papers.py /path/to/pdfs/ --batch-size 5 # smaller batches
+
+# Verify a specific paper landed:
+eph-rag src/query_bib_rag.py "<phrase unique to the new paper>" --top 3
+```
+
+Downloads land in the library's `md/` by default; keep PDFs durably (never /tmp).
+
+## Deleting papers
+
+```bash
+# Dry-run (default) — shows exactly what matches, deletes nothing:
+eph-rag scripts/remove_paper.py 10087273.md
+
+# By filename substring:
+eph-rag scripts/remove_paper.py --match Salvucci
+
+# Actually delete (chroma chunks + parent_store JSON + checkpoint/metadata entries):
+eph-rag scripts/remove_paper.py 10087273.md --apply
+```
+
+Deletion removes the paper completely — re-index the same md any time to bring
+it back cleanly. To wipe a whole library, just delete its folder (and its
+registry line in `src/kb_config.py`).
+
+---
+
+## Agentic RAG (v2.0)
 
 Full LangGraph-powered agentic pipeline with hierarchical retrieval, context compression, and conversation memory.
 
@@ -116,31 +222,6 @@ aggregate_answers → Final Answer with Sources
 
 ---
 
-## Adding New Papers
-
-Put new PDFs in your paper library and run:
-
-```bash
-cd bib_rag
-/usr/bin/python3.10 -B add_papers.py /path/to/new/pdfs/
-```
-
-This will:
-1. Extract PDFs to Markdown (pymupdf4llm)
-2. Copy PDFs to the library
-3. Run hierarchical build to index new papers
-4. Resume from checkpoint automatically
-
-**Options:**
-```bash
-/usr/bin/python3.10 -B add_papers.py /path/to/pdfs/ --skip-extract   # if already markdown
-/usr/bin/python3.10 -B add_papers.py /path/to/pdfs/ --batch-size 5   # smaller batches
-```
-
-**Prerequisite:** Embedding server must be running on port 8081.
-
----
-
 ## Zotero Access (MCP)
 
 bib_rag reaches your Zotero library through the **Zotero MCP server**
@@ -230,23 +311,6 @@ LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-se
 # Both should respond:
 curl http://localhost:8081/health   # embeddings
 curl http://localhost:5015/health   # LLM (only if local)
-```
-
----
-
-## Build Index (First Time)
-
-```bash
-cd bib_rag
-
-# GPU build (recommended)
-/usr/bin/python3.10 -B src/build_hierarchical_gpu.py --rebuild --batch-size 10
-
-# Resume interrupted build
-/usr/bin/python3.10 -B src/build_hierarchical_gpu.py --batch-size 10
-
-# CPU fallback (slower)
-/usr/bin/python3.10 -B src/build_hierarchical.py
 ```
 
 ---
