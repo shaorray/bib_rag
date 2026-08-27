@@ -21,10 +21,9 @@ many libraries:
 ```bash
 cd <this repo>
 
-# 0. Prerequisites — embedding server (REQUIRED for index + query):
-LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-server \
-  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
-  --port 8081 -c 8192 -ngl 999 --embedding -ub 2048 &
+# 0. Prerequisites — an OpenAI-compatible embedding server is REQUIRED
+#    for indexing and querying (bge-m3 recommended; see "Server Setup" below).
+#    This toolkit expects it on port 8081.
 curl http://localhost:8081/health          # → {"status":"ok"}
 
 # 1. Create a library (one command: folders + manifest + registry + wrapper)
@@ -269,21 +268,33 @@ glossary) · `LIBRARY.md` (manifest) · optional `scripts/` (domain-owned batch 
 
 ## Server Setup
 
+The toolkit talks to two local services over OpenAI-compatible HTTP APIs.
+Start them with your own `llama-server` build (or any compatible server);
+the exact binary path, model path and GPU flags depend on your machine.
+
+**Embedding server (required)** — an embedding model such as `bge-m3`,
+with embedding mode enabled. The `-ub 2048` physical-batch flag matters:
+the default of 512 rejects any chunk over 512 tokens (see Troubleshooting).
+
 ```bash
-# Start embedding server (bge-m3) — -ub 2048 is REQUIRED (see Troubleshooting)
-LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-server \
-  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
+llama-server -m /path/to/bge-m3.gguf \
   --port 8081 -c 8192 -ngl 999 --embedding -ub 2048 &
-
-# LLM: cloud gateway (Ollama, port 11434) is usually already running;
-# for a local GGUF instead:
-# llama-server -m /path/to/model.gguf --port 5015 -c 524288 -ngl 999 \
-#   --flash-attn on -np 2 --cache-type-k q8_0 --cache-type-v q8_0
-
-# Both should respond:
-curl http://localhost:8081/health   # embeddings
-curl http://localhost:5015/health   # LLM (only if local)
+curl http://localhost:8081/health   # → {"status":"ok"}
 ```
+
+**LLM (required only for agentic Q&A and classification)** — either a
+cloud gateway (e.g. Ollama's OpenAI-compatible endpoint) or a local GGUF:
+
+```bash
+# local model:
+llama-server -m /path/to/model.gguf --port 5015 -c 524288 -ngl 999 \
+  --flash-attn on -np 2 --cache-type-k q8_0 --cache-type-v q8_0 &
+curl http://localhost:5015/health
+```
+
+Point the toolkit at whichever backend you chose with `LLM_URL` / `LLM_MODEL`
+(see the Agentic RAG section). Default ports the toolkit expects:
+embeddings **8081**, LLM **11434** (cloud) or **5015** (local).
 
 ---
 
