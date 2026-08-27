@@ -143,41 +143,14 @@ cd bib_rag
 > **Note**: use `/usr/bin/python3.10` (the interpreter with langchain deps
 > installed), not bare `python3`.
 
-### Model Backend — Local vs Cloud
-
-Two backends, chosen via `LLM_URL` / `LLM_MODEL`:
-
-- **Cloud (default)**: `glm-5.2:cloud` through a local OpenAI-compatible
-  gateway (port 11434). Fast, but needs network and may incur cost.
-- **Local**: a GGUF file served by llama-server (port 5015), e.g. Qwen3.8-27B.
-  Fully offline and private, but slower — so it gets a smaller per-query
-  budget (3 iterations / 4 tool calls vs 10/8).
-
-The agent auto-detects the backend and adjusts the budget; override with
-`AGENT_MAX_ITERATIONS` / `AGENT_MAX_TOOL_CALLS`.
-
-```bash
-# Cloud (default)
-/usr/bin/python3.10 -B agentic_query.py "your question"
-
-# Local model (offline)
-LLM_URL=http://localhost:5015/v1 \
-LLM_MODEL=/path/to/model.gguf \
-/usr/bin/python3.10 -B agentic_query.py "your question"
-```
-
-| Env | Default | Meaning |
-|-----|---------|---------|
-| `LLM_URL` | `http://localhost:11434/v1` | OpenAI-compatible gateway (cloud) |
-| `LLM_MODEL` | `glm-5.2:cloud` | Cloud model name, or local `.gguf` path |
-| `LLM_API_KEY` | `not-required` | placeholder — the gateway doesn't validate it |
-
-> Note: pure reasoning models (e.g. `kimi-k3:cloud`) fail at function calling
-> through the gateway — use `glm-5.2:cloud` or `deepseek-v4-flash:cloud`.
+**Model choice**: agentic mode runs on a cloud model by default, but you can
+point it at a local model instead — set `LLM_URL` / `LLM_MODEL` to your
+llama-server endpoint and a `.gguf` path for a fully offline, private run.
+See `agentic_query.py --help` for the backend options.
 
 **Prerequisites**: Embedding server must be running.
 - Embeddings: bge-m3 on port 8081
-- LLM: the cloud gateway (port 11434) **or** a local GGUF (port 5015)
+- LLM: a cloud gateway (port 11434) **or** a local model (port 5015)
 
 ### Architecture
 
