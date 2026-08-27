@@ -1,3 +1,5 @@
+> **Status note (2026-08-27):** chunking/embedding concepts still apply. The sentence_transformers/haystack examples are educational — this toolkit actually embeds via the bge-m3 llama-server on port 8081 (see src/index_single_paper.py).
+
 # RAG Embedding 技术指南
 
 ## 核心概念

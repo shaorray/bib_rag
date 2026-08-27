@@ -1,3 +1,5 @@
+> **Status note (2026-08-27):** the design patterns described here (retrieval-as-tool, planner/reflector prompts) are implemented in the current LangGraph pipeline (src/agentic_graph.py, src/agent_nodes.py). Source article links may be dead.
+
 # 《Build Agentic RAG: LLM Autonomous Agents for Retrieval》学习报告
 
 **搜索日期**: 2026-03-28  

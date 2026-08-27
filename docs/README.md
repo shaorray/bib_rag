@@ -1,32 +1,27 @@
-# docs/ — documentation index
+# docs/ — technical reference for bib_rag
 
-## For new users (read in this order)
-1. **../GUIDE.md** (repo root) — set up a new RAG library in one command, services,
-   first paper in/out, troubleshooting. START HERE.
-2. **../README.md** — toolkit overview and layout (code vs libraries).
-3. **../CONTEXT.md** — what the domain-glossary convention is (each library has one).
+New users: start with [`../GUIDE.md`](../GUIDE.md) (set up a library in one
+command), then [`../README.md`](../README.md) (toolkit layout). The maintained,
+always-current procedures live in the Hermes skills `bib-rag-ingest` and
+`bib-rag-query`.
 
-## Canonical how-to references (live in the Hermes skills, not here)
-The complete, maintained procedures live in the Hermes agent skills — they are
-updated with every architecture change:
-- `bib-rag-ingest` — indexing, classification, tagging, metadata backfill, Zotero verification
-- `bib-rag-query` — semantic search, ToolFactory API, parent_store scanning, agentic Q&A,
-  DOI citation audit, Tavily supplementation
+## Technical references in this folder
 
-## Zotero
-- `archive/ZOTERO_MCP_USAGE.md` — local Zotero API (port 23119) quick reference.
-  Superseded by the `research-paper-management` Hermes skill but still accurate
-  for endpoint shapes (userID 0, /items/top meta-only, item["data"] nesting).
+| File | What you'll learn |
+|---|---|
+| `PHASE2_5_STATUS.md` | The hierarchical parent/child indexing design: why child chunks are searched and full parents retrieved, the ChromaDB/parent-store split, module responsibilities, and the store's scale characteristics. |
+| `AGENTIC_RAG_BEST_PRACTICES.md` | Agentic RAG design principles behind this toolkit: the four core agents, golden parameters (iterations/tool-call budgets, compression thresholds), planner/reflector prompt patterns for hallucination control. |
+| `AGENTIC_RAG_INTEGRATION_PLAN.md` | Design rationale for the LangGraph pipeline: state-machine workflow, context compression, map-reduce over multi-part queries — implemented as described in `src/agentic_graph.py` + `agentic_query.py`. |
+| `IMPROVEMENT_ANALYSIS.md` | Agentic-vs-classical RAG concepts, retrieval-as-tool pattern, and the evaluation thinking (RAGAS metrics) behind the toolkit's design choices. |
+| `RAG_EMBEDDING_GUIDE.md` | Chunking and embedding fundamentals: chunk-size/overlap tradeoffs, section-aware splitting, why embeddings quality dominates retrieval quality. |
+| `ZOTERO_MCP_USAGE.md` | Zotero local API (port 23119) endpoint reference: item listing/search, `item["data"]` nesting, collections — used by `scripts/zotero_access.py` and the metadata/writer tools. |
 
-## archive/ — historical (2026-03 → 2026-06), kept for provenance only
-Everything in `archive/` describes **obsolete systems or completed one-off work** and
-does NOT reflect the current architecture. Notable:
-- `README.md`, `USAGE.md`, `QUICK_START.md`, `SCHOLAR_API.md`, `ACADEMIC_USAGE.md`,
-  `PMID_CITATION_GUIDE.md` — the OLD ephrin_agentic_rag system (rag_core/SimpleEmbedding,
-  agentic_workflow.py, query_v2/v3_kb) which lived at /Disk_2/claw_working_dir/.
-  Replaced by this toolkit (ChromaDB + bge-m3 + kb_config multi-library).
-- `IMPROVEMENT_*`, `V3_IMPROVEMENT_REPORT`, `PHASE*_STATUS`, `AGENTIC_RAG_*`,
-  `CLEANUP_REPORT`, `FILE_INVENTORY`, `RAG_EMBEDDING_GUIDE` — design/learning reports
-  from the March–June 2026 build-out. Historical interest only.
+Each file carries a status banner marking what is current vs historical —
+check it before copying code examples.
 
-Do not follow code examples in archive/ — module names and paths no longer exist.
+## archive/ — obsolete systems (do not follow)
+
+Files describing the OLD `ephrin_agentic_rag` system (`rag_core.py`,
+`SimpleEmbedding`, `academic_writer.py`, `query_v2/v3_kb`) that lived at
+`/Disk_2/claw_working_dir/`, plus completed one-off cleanup/inventory reports.
+None of those modules exist in this toolkit. Historical provenance only.

@@ -1,3 +1,5 @@
+> **Status note (2026-08-27):** design principles and golden parameters are the basis of the current agentic pipeline (src/agent_*.py). Deployment snippets referencing openclaw.json are historical — the current entry point is `agentic_query.py` (see ../README.md).
+
 # Agentic RAG 最佳实践学习报告 (2026 工业级标准)
 
 **学习日期**: 2026-03-28  

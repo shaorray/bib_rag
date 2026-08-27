@@ -1,3 +1,5 @@
+> **Status note (2026-08-27):** architecture table and module list below reflect the current toolkit (ChromaDB `chroma_db_new/`, collection `bib_rag_papers`, parent_store, build_hierarchical_gpu). Some chunk/paper counts are historical snapshots — query the store for current numbers.
+
 # Phase 1-5: Complete Agentic RAG Implementation Status
 
 ## ✅ Phase 1: Foundation (Parent/Child Hierarchical Indexing) — COMPLETE

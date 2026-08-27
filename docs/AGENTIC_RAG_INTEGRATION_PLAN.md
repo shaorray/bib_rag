@@ -1,3 +1,5 @@
+> **Status note (2026-08-27):** this plan WAS implemented — agentic_query.py, src/agent_tools.py and the LangGraph pipeline exist as described. Read as design rationale, not a todo list.
+
 # Agentic RAG Integration Plan for bib_rag
 
 Based on: `/Disk_bot/github_repos/agentic-rag-for-dummies`

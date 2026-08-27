@@ -1,3 +1,5 @@
+> **Status note (2026-08-27):** endpoints and the userID-0 convention are still accurate. For the maintained integration see the Hermes skill `research-paper-management` and scripts/zotero_access.py.
+
 # Zotero MCP Usage Guide for OpenClaw
 
 ## Overview
