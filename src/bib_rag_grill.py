@@ -44,8 +44,12 @@ from typing import Dict, List, Optional
 from odf.opendocument import OpenDocumentText
 from odf.text import P, H
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kb_config import get_config
+
 # === Paths ===
-BIB_RAG_ROOT = Path("/Disk_bot/RAG/bib_rag")
+_CFG = get_config()
+BIB_RAG_ROOT = Path(_CFG["data_root"])
 CONTEXT_PATH = BIB_RAG_ROOT / "CONTEXT.md"
 SPEC_DIR = Path("/tmp/bib_rag_grill_specs")
 SPEC_DIR.mkdir(exist_ok=True)

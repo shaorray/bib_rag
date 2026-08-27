@@ -42,9 +42,10 @@ from kb_config import get_config, parse_kb_arg
 _argv = parse_kb_arg()
 
 _CFG = get_config()
-KB_ROOT = Path(_CFG["kb_root"])
+CODE_ROOT = Path(_CFG["code_root"])
+KB_ROOT = Path(_CFG["data_root"])  # data dir (chroma, parent_store) for display
 DEFAULT_PAPERS_DIR = Path("/Disk_bot/paper_lib/My Library/md")
-QUERY_SCRIPT = KB_ROOT / "src" / "query_bib_rag.py"
+QUERY_SCRIPT = CODE_ROOT / "src" / "query_bib_rag.py"
 
 # Indexing is done by src/index_single_paper.py (uses llama-server embedding on
 # port 8081, bypassing the broken SentenceTransformers import). build_hierarchical.py

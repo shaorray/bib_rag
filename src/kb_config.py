@@ -1,86 +1,136 @@
 #!/usr/bin/env python3
 """
-kb_config.py — Shared knowledge-base configuration for bib_rag tools.
+kb_config.py — Shared configuration for the RAG toolkit (code) + knowledge-base
+stores (data). Architecture (2026-08-27):
 
-Supports multiple named knowledge bases via BIB_RAG_ROOT env var.
-Defaults to the original bib_rag (Eph-ephrin) database.
+    /Disk_bot/RAG/bib_rag/     CODE  — src/, scripts/, docs/ (this repo, ~1MB)
+    /Disk_bot/RAG/eph_rag/     DATA  — Eph-ephrin library (chroma_db, parent_store, data, outputs)
+    /Disk_bot/RAG/geo_rag/     DATA  — geology/renewables library
 
-Usage:
-  # Default (bib_rag / Eph-ephrin):
-  python3 -B query_bib_rag.py "Eph receptor signaling"
+A "library" = a data directory that is self-describing (its own chroma_db_new/,
+parent_store/, data/, outputs/, CONTEXT.md, LIBRARY.md). The tool code is
+shared; adding a new library never touches code beyond one registry line.
 
-  # Switch to geo_rag:
-  BIB_RAG_ROOT=/Disk_bot/RAG/geo_rag python3 -B query_bib_rag.py "subduction zone"
+Resolution (highest wins):
+  1. BIB_RAG_ROOT       — explicit data-root override
+  2. BIB_RAG_KB_NAME    — registry lookup (also accepts --kb flag)
+  3. legacy: "bib_rag" name still resolves to eph_rag (deprecated alias)
+  4. default: eph_rag
 
-  # Or use --kb flag (if script supports it):
-  python3 -B query_bib_rag.py --kb geo_rag "subduction zone"
-
-Named KB registry:
-  Set BIB_RAG_KB_NAME to "bib_rag" (default) or "geo_rag", and BIB_RAG_ROOT
-  to the KB directory. If only BIB_RAG_KB_NAME is set, the root is auto-resolved.
+Env vars:
+  BIB_RAG_KB_NAME     eph_rag (default) | geo_rag | ...
+  BIB_RAG_ROOT        explicit library/data root (overrides registry)
+  BIB_RAG_COLLECTION  collection name override (default comes from registry)
+  BIB_RAG_CODE_ROOT   override the tool-code root (default: /Disk_bot/RAG/bib_rag)
 """
 
 import os
 from pathlib import Path
 
-# ─── Named KB registry ─────────────────────────────────────────────────────
+# ─── Fixed tool-code root ───────────────────────────────────────────────────
+_CODE_ROOT = os.environ.get("BIB_RAG_CODE_ROOT", "/Disk_bot/RAG/bib_rag")
+
+# ─── Named library registry ────────────────────────────────────────────────
+# Each entry: data root + canonical collection name. Adding a library = adding
+# one entry here (or setting BIB_RAG_ROOT/BIB_RAG_COLLECTION directly).
 _KB_REGISTRY = {
-    "bib_rag": "/Disk_bot/RAG/bib_rag",
-    "geo_rag": "/Disk_bot/RAG/geo_rag",
+    "eph_rag": {
+        "root": "/Disk_bot/RAG/eph_rag",
+        "collection": "bib_rag_papers",   # historical name, kept for the existing 470K chunks
+    },
+    "geo_rag": {
+        "root": "/Disk_bot/RAG/geo_rag",
+        "collection": "geo_rag_papers",
+    },
 }
 
-def get_kb_name() -> str:
-    """Get the active KB name from env, default 'bib_rag'."""
-    return os.environ.get("BIB_RAG_KB_NAME", "bib_rag")
+# Legacy aliases (deprecated, print a warning once)
+_LEGACY_ALIASES = {
+    "bib_rag": "eph_rag",
+}
+_WARNED = set()
 
-def get_kb_root() -> str:
-    """
-    Resolve the active KB root directory.
-    Priority: BIB_RAG_ROOT env > BIB_RAG_KB_NAME registry > default bib_rag.
-    """
-    # Explicit root override
+
+def get_kb_name() -> str:
+    """Active library name; 'bib_rag' is accepted as a deprecated alias for eph_rag."""
+    name = os.environ.get("BIB_RAG_KB_NAME", "eph_rag")
+    if name in _LEGACY_ALIASES and name not in _WARNED:
+        _WARNED.add(name)
+        import sys
+        print(f"[kb_config] WARNING: '{name}' is deprecated, use '{_LEGACY_ALIASES[name]}'",
+              file=sys.stderr)
+        name = _LEGACY_ALIASES[name]
+    return name
+
+
+def get_code_root() -> str:
+    """Tool-code root (src/, scripts/). Independent of which library is active."""
+    return _CODE_ROOT
+
+
+def get_data_root() -> str:
+    """Resolve the active library's data directory.
+    Priority: BIB_RAG_ROOT env > registry[name] > default eph_rag."""
     root = os.environ.get("BIB_RAG_ROOT")
     if root:
         return root
-
-    # Named KB lookup
     name = get_kb_name()
     if name in _KB_REGISTRY:
-        return _KB_REGISTRY[name]
+        return _KB_REGISTRY[name]["root"]
+    return _KB_REGISTRY["eph_rag"]["root"]
 
-    # Fallback: default
-    return "/Disk_bot/RAG/bib_rag"
+
+def get_collection_name() -> str:
+    """Collection for the active library.
+    Priority: BIB_RAG_COLLECTION env > registry > 'bib_rag_papers' (eph default)."""
+    env = os.environ.get("BIB_RAG_COLLECTION")
+    if env:
+        return env
+    name = get_kb_name()
+    if name in _KB_REGISTRY:
+        return _KB_REGISTRY[name].get("collection", "bib_rag_papers")
+    return "bib_rag_papers"
+
 
 def get_config() -> dict:
-    """
-    Return all paths/urls for the active knowledge base.
-    Embedding endpoint is shared (bge-m3 is domain-general).
-    """
-    root = get_kb_root()
+    """All paths/urls for the active library. Embedding/LLM endpoints are shared
+    (bge-m3 and Qwen/Ollama are domain-general services on fixed ports)."""
+    root = get_data_root()
     return {
-        "kb_root": root,
         "kb_name": get_kb_name(),
+        "code_root": get_code_root(),
+        "kb_root": root,               # deprecated alias for data_root
+        "data_root": root,
         "chroma_path": os.path.join(root, "chroma_db_new"),
         "chroma_sqlite": os.path.join(root, "chroma_db_new", "chroma.sqlite3"),
         "parent_store_dir": os.path.join(root, "parent_store"),
         "parent_store_disabled_dir": os.path.join(root, "parent_store_disabled"),
+        "data_dir": os.path.join(root, "data"),
+        "outputs_dir": os.path.join(root, "outputs"),
         "metadata_log": os.path.join(root, "data", "incremental_metadata.json"),
         "checkpoint_file": os.path.join(root, "data", "build_hierarchical_checkpoint.json"),
+        "context_md": os.path.join(root, "CONTEXT.md"),   # per-library domain glossary
         "embed_url": "http://localhost:8081/v1/embeddings",
         "embed_url_raw": "http://localhost:8081/embedding",
-        "collection_name": os.environ.get("BIB_RAG_COLLECTION", "bib_rag_papers"),
+        "collection_name": get_collection_name(),
     }
 
+
+# Backwards-compat aliases (older code imported these names)
+def get_kb_root() -> str:
+    """Deprecated: use get_data_root()."""
+    return get_data_root()
+
+
 # ─── Convenience: CLI --kb flag support ────────────────────────────────────
-def parse_kb_arg(argv: list = None) -> str:
+def parse_kb_arg(argv=None) -> list:
     """
     Scan argv for --kb <name> or --kb=<name> and set env accordingly.
     Returns the remaining argv (with --kb stripped).
-    Call at the top of any script that wants --kb support.
     """
     import sys
     if argv is None:
-        argv = sys.argv[1:]
+        argv = list(sys.argv[1:])
 
     remaining = []
     i = 0
@@ -95,19 +145,27 @@ def parse_kb_arg(argv: list = None) -> str:
             remaining.append(argv[i])
             i += 1
 
-    # Auto-resolve root from name if not explicitly set
-    name = os.environ.get("BIB_RAG_KB_NAME", "bib_rag")
+    # Auto-resolve root+collection from the registry if not explicitly set
+    name = os.environ.get("BIB_RAG_KB_NAME", "eph_rag")
+    if name in _LEGACY_ALIASES:
+        name = _LEGACY_ALIASES[name]
+        os.environ["BIB_RAG_KB_NAME"] = name
     if "BIB_RAG_ROOT" not in os.environ and name in _KB_REGISTRY:
-        os.environ["BIB_RAG_ROOT"] = _KB_REGISTRY[name]
+        os.environ["BIB_RAG_ROOT"] = _KB_REGISTRY[name]["root"]
+    if "BIB_RAG_COLLECTION" not in os.environ and name in _KB_REGISTRY:
+        os.environ["BIB_RAG_COLLECTION"] = _KB_REGISTRY[name]["collection"]
 
     return remaining
 
+
 def print_config():
-    """Print active KB config (for debugging)."""
+    """Print active config (for debugging)."""
     cfg = get_config()
-    print(f"  KB name:       {cfg['kb_name']}")
-    print(f"  KB root:       {cfg['kb_root']}")
+    print(f"  Library:       {cfg['kb_name']}")
+    print(f"  Data root:     {cfg['data_root']}")
+    print(f"  Code root:     {cfg['code_root']}")
     print(f"  ChromaDB:      {cfg['chroma_path']}")
     print(f"  Parent store:  {cfg['parent_store_dir']}")
+    print(f"  Outputs:       {cfg['outputs_dir']}")
     print(f"  Embed URL:     {cfg['embed_url']}")
     print(f"  Collection:    {cfg['collection_name']}")

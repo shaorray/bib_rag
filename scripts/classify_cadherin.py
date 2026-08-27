@@ -18,11 +18,16 @@ import os
 import sys
 import time
 
+sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
+from kb_config import get_config
+
+_CFG = get_config()
+
 LOCAL_URL = "http://localhost:5015/v1"
 LOCAL_MODEL = "/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf"
 CLOUD_URL = "http://localhost:11434/v1"
 CLOUD_MODEL = "glm-5.2:cloud"
-OUT_DIR = "/Disk_bot/RAG/bib_rag/outputs"
+OUT_DIR = _CFG["outputs_dir"]
 
 TOPIC_EXAMPLES = [
     "eph-signaling", "notch-signaling", "wnt-signaling", "shh-signaling",

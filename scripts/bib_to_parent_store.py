@@ -14,18 +14,24 @@
 import json
 import re
 import argparse
+import sys
 from pathlib import Path
 from datetime import datetime
+
+sys.path.insert(0, '/Disk_bot/RAG/bib_rag/src')
+from kb_config import get_config
 
 from bib_utils import (
     extract_year_from_content, filename_to_key, normalize,
     normalize_doi, parse_bib_entries, strip_author_year_prefix,
 )
 
+_CFG = get_config()
+
 BIB_PATH = Path('/Disk_bot/My Library.bib')
-PARENT_STORE = Path('/Disk_bot/RAG/bib_rag/parent_store')
-BACKUP_DIR = Path('/Disk_bot/RAG/bib_rag/data/parent_store_backup_doi')
-MATCH_LOG = Path('/Disk_bot/RAG/bib_rag/data/bib_to_parent_store_log.json')
+PARENT_STORE = Path(_CFG["parent_store_dir"])
+BACKUP_DIR = Path(_CFG["data_dir"]) / "parent_store_backup_doi"
+MATCH_LOG = Path(_CFG["data_dir"]) / "bib_to_parent_store_log.json"
 
 
 def match_paper_to_entry(paper_key, bib_entries, paper_abstract_norm=''):

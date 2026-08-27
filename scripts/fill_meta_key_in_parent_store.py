@@ -37,10 +37,15 @@ from pathlib import Path
 
 from bib_utils import normalize_doi
 
-PARENT_DIR = "/Disk_bot/RAG/bib_rag/parent_store"
+sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
+from kb_config import get_config
+
+_CFG = get_config()
+
+PARENT_DIR = _CFG["parent_store_dir"]
 BIB_PATH = "/Disk_bot/My Library.bib"
-OUT_DIR = "/Disk_bot/RAG/bib_rag/outputs"
-DATA_DIR = "/Disk_bot/RAG/bib_rag/data"
+OUT_DIR = _CFG["outputs_dir"]
+DATA_DIR = _CFG["data_dir"]
 
 # ----------------------------- helpers -----------------------------
 

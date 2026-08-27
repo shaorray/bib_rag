@@ -50,16 +50,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
+from kb_config import get_config
+
+_CFG = get_config()
+
 # ---------------------------------------------------------------------------
 # Defaults (overridable via CLI)
 # ---------------------------------------------------------------------------
 
-DEFAULT_PARENT_DIR = Path("/Disk_bot/RAG/bib_rag/parent_store")
+DEFAULT_PARENT_DIR = Path(_CFG["parent_store_dir"])
 DEFAULT_BIB_PATH = Path("/Disk_bot/My Library.bib")
 DEFAULT_ZOTERO_URL = "http://localhost:23119"
 DEFAULT_CROSSREF_MAILTO = "bib-rag@example.com"
-DEFAULT_DATA_DIR = Path("/Disk_bot/RAG/bib_rag/data")
-DEFAULT_OUT_DIR = Path("/Disk_bot/RAG/bib_rag/outputs")
+DEFAULT_DATA_DIR = Path(_CFG["data_dir"])
+DEFAULT_OUT_DIR = Path(_CFG["outputs_dir"])
 
 DATE_TAG = datetime.now().strftime("%Y-%m-%d")
 

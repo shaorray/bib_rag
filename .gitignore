@@ -1,4 +1,4 @@
-# Large generated files
+# Data lives in sibling library folders (eph_rag/, geo_rag/) — never in this repo
 parent_store/
 parent_store_disabled/
 chroma_db_new/
@@ -6,6 +6,8 @@ data/
 safe_zone/
 archive/
 outputs/
+eph_rag/
+geo_rag/
 
 # Python cache
 __pycache__/
