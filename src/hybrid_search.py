@@ -230,11 +230,17 @@ class HybridIndex:
         vector_results / bm25_results entries need: parent_id, source,
         section, text (+ similarity / bm25 for display).
         RRF score = Σ 1/(k + rank) over lists where the chunk appears
-        (k=60). Dedup key: (parent_id, first 80 chars of text) — the same
-        chunk from both channels must not double-count."""
+        (k=60).
+
+        Dedup key: parent_id ONLY. chroma's historical chunk texts and the
+        FTS index (rebuilt from parent_store with the current chunking
+        logic) drift within the same parent (generational drift), so any
+        text-based key silently loses dual-channel signal. Parent-level
+        dedup is the correct evidence-unit anyway: two children of the
+        same parent are two views of one document.
+        """
         def _key(r):
-            h = hashlib.md5((r.get("parent_id", "") + "|" + r.get("text", "")[:80]).encode())
-            return h.hexdigest()
+            return r.get("parent_id", "")
 
         fused: dict = {}
         for rank, r in enumerate(vector_results, 1):

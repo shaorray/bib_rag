@@ -424,7 +424,9 @@ def collect_answer(state: AgentState):
     if is_valid and os.environ.get("CITATION_GUARD", "1") != "0":
         try:
             from .citation_guard import enforce_citation_guard
-            answer, report = enforce_citation_guard(answer, state.get("retrieval_keys", set()))
+            answer, report = enforce_citation_guard(
+                answer, state.get("retrieval_keys", set()),
+                tool_messages=state.get("messages") or [])
             if report.get("dropped"):
                 guard_note = f"[citation_guard] removed {report['dropped']} unverifiable source line(s)"
         except Exception as e:  # guard must never break answering
@@ -434,7 +436,16 @@ def collect_answer(state: AgentState):
         "final_answer": answer,
         "guard_note": guard_note,
         "agent_answers": [
-            {"index": state["question_index"], "question": state["question"], "answer": answer}
+            {
+                "index": state["question_index"],
+                "question": state["question"],
+                "answer": answer,
+                # Evidence-ledger passthrough for evaluate.citation_faithfulness:
+                # Send()-spawned subgraph AgentState fields are not visible in
+                # the main-graph checkpoint, so the whitelist keys ride along
+                # here (LangGraph: only State-level channels persist).
+                "retrieval_keys": sorted(state.get("retrieval_keys", set()) or set()),
+            }
         ],
     }
 

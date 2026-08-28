@@ -31,7 +31,9 @@ _CFG = get_config()
 
 def agentic_answer(query, graph):
     """Full agentic pipeline. Also returns the retrieval_keys ledger so
-    citation_faithfulness can score the answer's sources."""
+    citation_faithfulness can score the answer's sources. Keys are carried
+    through agent_answers by collect_answer (subgraph AgentState fields do
+    not persist to the main-graph checkpoint)."""
     start = time.time()
     result = graph.invoke(
         {"messages": [HumanMessage(content=query)]},
@@ -39,16 +41,17 @@ def agentic_answer(query, graph):
     )
     elapsed = time.time() - start
     answer = result["messages"][-1].content
-    # retrieval_keys live in the agent-subgraph state channel; recover them
-    # from the final checkpoint state if exposed, else empty.
     retrieval_keys = set()
-    try:
-        state_values = result.get("agent_answers") or []
-        # retrieval_keys are merged into checkpoint state; read via graph.get_state
-        snap = graph.get_state({"configurable": {"thread_id": f"eval-{hash(query) % 10000}"}})
-        retrieval_keys = set(snap.values.get("retrieval_keys") or set())
-    except Exception:
-        pass
+    for a in result.get("agent_answers") or []:
+        if isinstance(a, dict) and a.get("retrieval_keys"):
+            retrieval_keys.update(a["retrieval_keys"])
+    if not retrieval_keys:
+        # fallback: try the main-graph checkpoint state
+        try:
+            snap = graph.get_state({"configurable": {"thread_id": f"eval-{hash(query) % 10000}"}})
+            retrieval_keys = set(snap.values.get("retrieval_keys") or set())
+        except Exception:
+            pass
     return answer, elapsed, retrieval_keys
 
 

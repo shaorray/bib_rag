@@ -140,6 +140,37 @@ def parent_ids_from_keys(retrieval_keys: Set[str]) -> Set[str]:
     return out
 
 
+_PARENT_ID_IN_TEXT_RE = re.compile(r"Parent ID:\s*(\S+)")
+
+# ToolMessage name → treat as retrieval evidence (search results carry
+# "Parent ID:" lines even when the agent never called retrieve_parent_chunks)
+
+
+def parent_ids_from_tool_messages(messages) -> Set[str]:
+    """Fallback whitelist source: parse 'Parent ID: X' lines out of ToolMessages.
+
+    Needed because the agent may answer after search_child_chunks alone
+    (retrieval_keys then only holds search:: entries, and the strict
+    parent:: whitelist would be empty — dropping every citation despite a
+    successful retrieval). Search results are retrieval evidence too: the
+    tool output literally lists the parent_ids whose excerpts were shown.
+    """
+    out: Set[str] = set()
+    for m in messages or []:
+        name = getattr(m, "name", "") or ""
+        if name not in ("search_child_chunks", "retrieve_parent_chunks",
+                        "retrieve_many_parents"):
+            continue
+        content = getattr(m, "content", "")
+        if not isinstance(content, str):
+            continue
+        for hit in _PARENT_ID_IN_TEXT_RE.finditer(content):
+            pid = hit.group(1).strip().strip('*_')
+            if pid and pid not in ("unknown", "N/A", "none"):
+                out.add(pid)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Answer parsing: find the Sources section and [SOURCE n]-style markers
 # ---------------------------------------------------------------------------
@@ -220,6 +251,17 @@ def resolve_source_lines(source_lines: List[str],
                 if stem in source_stems:
                     pid = by_source[source_stems[stem]][0]
                     break
+            # fallback: known pids whose SOURCE part starts with the cited
+            # stem (long hyphenated store names get split by the filename
+            # regex at '_-_'; a prefix match over the raw source string is
+            # more robust)
+            if pid is None:
+                line_l = line.lower()
+                for src_name, pids_for_src in by_source.items():
+                    src_stem = os.path.splitext(src_name)[0].lower()
+                    if len(src_stem) >= 8 and src_stem in line_l:
+                        pid = pids_for_src[0]
+                        break
         # Strategy 3: explicit 'Parent ID:' hint
         if pid is None:
             m = _PARENT_ID_HINT_RE.search(line)
@@ -344,22 +386,28 @@ def claim_supported_lexically(claim: str, chunk_text: str,
 def enforce_citation_guard(answer: str,
                            retrieval_keys: Set[str],
                            parent_meta: Optional[Dict[str, dict]] = None,
+                           tool_messages=None,
                            ) -> Tuple[str, Dict]:
     """Deterministically verify the Sources section of a finished answer.
 
     Pipeline (zero LLM):
-      1. Parse the Sources section into lines.
-      2. Resolve each line to a parent_id (whitelist membership check).
-      3. Drop lines that resolve to nothing (unverifiable → hallucination risk).
-      4. Lexical spot-check: for lines with a resolved parent, verify the
+      1. Build the whitelist: parent:: keys from retrieval_keys PLUS any
+         'Parent ID:' lines found in retrieval ToolMessages (the agent may
+         answer from search results without retrieving parents).
+      2. Parse the Sources section into lines.
+      3. Resolve each line to a parent_id (whitelist membership check).
+      4. Drop lines that resolve to nothing (unverifiable → hallucination risk).
+      5. Lexical spot-check: for lines with a resolved parent, verify the
          answer's body shares lexical support with the parent text. Failures
          are annotated, not silently kept.
-      5. Rewrite the Sources section; append a guard report.
+      6. Rewrite the Sources section; append a guard report.
 
     Returns (guarded_answer, report_dict).
     report keys: kept, dropped, annotated, dropped_lines, notes
     """
     known = parent_ids_from_keys(retrieval_keys)
+    if tool_messages:
+        known = known | parent_ids_from_tool_messages(tool_messages)
     if parent_meta is None:
         parent_meta = load_parent_meta_map(known)
 

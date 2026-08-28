@@ -92,14 +92,20 @@ def search_zotero(title: str, doi: str = "") -> Dict:
     blind `items[0]` trust produced wrong-paper citations on fuzzy hits.
     Returns None when no candidate verifies (caller falls back to parsing
     the passage title itself).
+
+    Query shortening: the Zotero MCP search degrades on long queries (an
+    8+ word title returns unrelated papers and evicts the true hit from the
+    top-k). The first ~8 title words are the discriminative part, so the
+    query is truncated there before searching.
     """
     clean_title = re.sub(r'^[A-Z][a-z]+ et al\. - \d{4} - ', '', title)
+    short_query = " ".join(clean_title.split()[:8]) or clean_title
 
-    items = zotero_access.zotero_search(clean_title, limit=5)
+    items = zotero_access.zotero_search(short_query, limit=5)
     if not items:
         return None
 
-    best = zotero_match.pick_best_hit(items, clean_title, doi)
+    best = pick_best_hit(items, clean_title, doi)
     if best is None:
         return None
 
@@ -107,7 +113,7 @@ def search_zotero(title: str, doi: str = "") -> Dict:
     # Re-verify against the FULL record (search snippets can carry truncated
     # titles); a conflict here means the snippet matched but the item is not
     # the same paper.
-    ok, _s, _r = zotero_match.verify_zotero_hit(
+    ok, _s, _r = verify_zotero_hit(
         clean_title, doi, {"title": full.get("title", ""), "doi": full.get("doi", "")})
     if not ok:
         return None
