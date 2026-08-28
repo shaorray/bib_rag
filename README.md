@@ -241,8 +241,9 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   ├── bib_utils.py            ← Shared normalization / .bib / filename helpers
 │   ├── zotero_access.py        ← Zotero access layer (MCP first, HTTP fallback)
 │   ├── test_utilities.py       ← Regression tests (no network)
-│   ├── classify_all.py · classify_demo.py · apply_tags.py · migrate_topics.py ← LLM classification pipeline
-│   └── (domain-specific batch tools also live in each library's scripts/ folder)
+│   ├── classify_papers.py · backfill_metadata.py · apply_tags.py · migrate_topics.py ← classification pipeline (domain-agnostic)
+│   ├── remove_paper.py · setup_library.py ← library lifecycle
+│   └── archive_project_specific/ ← superseded one-off corpus scripts (provenance only)
 │
 ├── src/                        ← RAG library & query/writer tools
 │   ├── kb_config.py            ← SINGLE PATH-RESOLUTION POINT: registry + BIB_RAG_* env

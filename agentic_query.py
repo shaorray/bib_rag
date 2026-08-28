@@ -15,7 +15,14 @@ import sys
 import argparse
 
 # Ensure src/ is on the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+sys.path.insert(0, _src_dir)
+
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+# Supports --kb flag and BIB_RAG_KB_NAME env var for switching knowledge bases.
+# Must run BEFORE importing agent_tools (which calls get_config() at import time).
+from kb_config import parse_kb_arg
+_argv = parse_kb_arg()
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage

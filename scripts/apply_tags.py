@@ -45,7 +45,7 @@ def load_tags(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", required=True, help="tags CSV from classify_all.py")
+    ap.add_argument("--csv", required=True, help="tags CSV from classify_papers.py")
     ap.add_argument("--dry-run", action="store_true", help="only report, don't write")
     args = ap.parse_args()
 
