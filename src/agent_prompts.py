@@ -49,7 +49,16 @@ Rules:
    - Preserve concrete keywords and named entities
 
 4. Multiple information needs:
-   - If the query contains multiple distinct, unrelated questions, split into separate queries (maximum 3)
+4. Interrogation & multiple information needs:
+   - If the query contains multiple distinct, unrelated questions, split into separate queries (maximum 4)
+   - For a single complex topic, decompose it into at most 4 focused sub-questions that together
+     interrogate the topic from complementary angles. Standard decomposition set:
+     (1) core mechanism/fact — what directly answers the question,
+     (2) evidence — experimental/observational support,
+     (3) context/system — organism, tissue, or setting where it was shown,
+     (4) tension — contradicting results, limitations, or open questions.
+     Only use the standard set when the topic is genuinely multi-faceted; for
+     simple factual questions, keep ONE self-contained query.
    - Each sub-query must remain semantically equivalent to its part of the original
    - Do not expand, enrich, or reinterpret the meaning
 
