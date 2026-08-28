@@ -20,7 +20,9 @@ first layer that resolves it:
 
 ```
 0. BibTeX snapshot  — if provided (--bib or config.json bib_path):
-                      bib_to_parent_store triple-match DOI backfill
+                      bind_zotero.py — binds meta.doi + meta.key (Zotero
+                      citation key) per paper; triple-match + title-search +
+                      PMID-bridge (PubMed esummary) + DOI-bridge
 1. Live Zotero      — if reachable (MCP or HTTP): zotero_search/zotero_item
 2. Remote registries — Crossref DOI verify → Crossref/OpenAlex/PubMed title search
 3. Final proof-read  — meta_audit.py round (confidence-gated, backs up)
@@ -43,13 +45,12 @@ titles from "Developmental Biology **207, available online..." style noise.
 |---|---|---|
 | 1. Tag generation (LLM) | `classify_papers.py` (in `scripts/`) | `outputs/<tags>.csv` (source, year, title, article_type, topics) |
 | 2. Clean-metadata overwrite + tags | `backfill_metadata.py` | chroma metadata: title/authors/journal/doi/year + article_type + topic_* |
-| 3. DOI backfill from BibTeX | `bib_to_parent_store.py` | parent_store meta.doi (triple-match: lastname+year+title-prefix; unmatched never written) |
-| 4. Zotero key fill | `fill_meta_key_in_parent_store.py` | parent_store meta.key (Zotero article_key, DOI-matched) |
+| 3. Zotero binding (BibTeX snapshot) | `bind_zotero.py` | parent_store meta.doi + meta.key (Zotero citation key) in one pass; matchers: triple-match → title reverse-search → PMID-bridge (PubMed esummary) → DOI-bridge; unmatched never written |
 | 5. Audit + remote fetch | `meta_audit.py` | verifies/fetches title, year, journal, authors, doi via Crossref/PubMed/OpenAlex; confidence-gated, backs up before write; reports in `data/` |
 | 6. Tag migration (legacy) | `migrate_topics.py` | converts older topic representations → `topic_<kw>:1` boolean keys |
 
 `apply_tags.py` = tags-only variant of step 2 (use when there is no clean
-metadata CSV). `scripts/remove_paper.py` is the reset button for a paper whose
+metadata CSV). `scripts/bib_to_parent_store.py` and `fill_meta_key_in_parent_store.py` are the pre-merge originals (fill_meta_key archived; bib_to_parent_store still holds the matchers bind_zotero imports). `scripts/remove_paper.py` is the reset button for a paper whose
 metadata is wrong beyond repair: delete, fix the source, re-index.
 
 ## Invariants

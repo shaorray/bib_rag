@@ -241,7 +241,7 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │
 ├── scripts/                    ← Utilities & pipelines
 │   ├── metadata/               ← METADATA FIXATION PIPELINE (see metadata/README.md):
-│   │     backfill_metadata · bib_to_parent_store · fill_meta_key · meta_audit (Crossref/PubMed/OpenAlex)
+│   │     bind_zotero (BibTeX→doi+key) · backfill_metadata · meta_audit (Crossref/PubMed/OpenAlex)
 │   │     apply_tags · migrate_topics ← classification tags; sources: BibTeX snapshot > live Zotero > registries
 │   ├── classify_papers.py      ← LLM tagging (article_type + open-vocab topics, 3 input modes)
 │   ├── bib_utils.py            ← Shared normalization / .bib / filename helpers

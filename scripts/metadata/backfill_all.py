@@ -85,38 +85,26 @@ def norm_title(t):
 def layer_bib(bib_path, candidates, dry_run):
     """Reuse bib_to_parent_store's matcher for per-paper resolution."""
     from bib_utils import parse_bib_entries
-    from bib_to_parent_store import match_paper_to_entry, match_paper_by_title
+    from bind_zotero import bind_paper
     entries = parse_bib_entries(Path(bib_path))
     print(f"[layer 0] BibTeX snapshot: {len(entries)} entries from {bib_path}")
     import re
     results = []
     for c in candidates:
-        title = c["title"]
-        year = str(c["meta"].get("year", "") or "")
-        # derive lastname from filename stem ("Author_et_al_-_..." / "Boström_...")
-        stem = c["file"].replace(".md", "")
-        first = re.split(r"[_\-]", stem)[0]
-        lastname = first if first and not first.isdigit() else ""
-        entry, status = None, "no_match"
-        if title and year:
-            entry, status = match_paper_by_title(title, year, entries,
-                                                 paper_abstract_norm="")
-        if entry is None and lastname:
-            entry, status = match_paper_to_entry(
-                (lastname, year, (title or "").lower()),
-                entries, paper_abstract_norm="")
-        if entry and entry.get("doi"):
+        rec = bind_paper(Path(c["file"]) if Path(c["file"]).exists()
+                         else Path(_CFG["parent_store_dir"]) / c["file"],
+                         entries, c["meta"])
+        if rec["status"] == "matched":
             results.append({"source": c["file"], "layer": "bib",
-                            "title": entry.get("title", title),
-                            "year": entry.get("year", year),
-                            "doi": entry.get("doi", ""),
-                            "authors": entry.get("author", ""),
-                            "status": "matched", "detail": f"bib:{status}"})
+                            "title": rec["title"], "year": rec["year"],
+                            "doi": rec["doi"], "authors": rec["authors"],
+                            "status": "matched",
+                            "detail": f"bib:{rec['match_type']}"})
         else:
             results.append({"source": c["file"], "layer": "bib",
-                            "title": title, "year": year, "doi": "",
-                            "authors": "", "status": "unmatched",
-                            "detail": "no bib entry passed matching"})
+                            "title": c["title"], "year": c["meta"].get("year", ""),
+                            "doi": "", "authors": "", "status": "unmatched",
+                            "detail": f"no bib binding ({rec['match_type']})"})
     return results
 
 

@@ -20,3 +20,5 @@ remain the canonical ones for that corpus.
 
 These archived copies reference `/Disk_bot/Eph/Cadherin_papers/` and other
 corpus-specific paths; they are kept for provenance only.
+
+| `fill_meta_key_in_parent_store.py` | fill Zotero article_key into parent_store (DOI-bridged) | merged into `scripts/metadata/bind_zotero.py` (writes meta.doi + meta.key in one pass) |
