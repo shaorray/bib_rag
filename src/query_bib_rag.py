@@ -219,6 +219,33 @@ def cite_mode(claim: str, top_k: int = 5):
     return results
 
 
+def export_bib(results: List[Dict], out_path: str, offline: bool = False) -> int:
+    """Write a References .bib for the papers in a search/cite result set.
+
+    Consumes the chunk metadata already produced by search() (parent_store
+    meta, incl. meta.key); dedupes by source filename so multi-chunk papers
+    yield one entry. Returns the number of entries written.
+    """
+    try:
+        from bibtex_export import export_answers_bib
+    except ImportError:  # src/ on sys.path directly
+        from src.bibtex_export import export_answers_bib
+    sources: List[str] = []
+    seen = set()
+    for r in results:
+        src = (r.get("metadata") or {}).get("source", "")
+        if src and src not in seen:
+            seen.add(src)
+            sources.append(src)
+    if not sources:
+        print("⚠️  No citable sources in this result set — nothing to export.")
+        return 0
+    res = export_answers_bib(sources, out_path, offline=offline)
+    print(f"📖 BibTeX: {res['written']} entr{'y' if res['written'] == 1 else 'ies'} "
+          f"→ {res['out_path']} ({res['skipped']} skipped)")
+    return res["written"]
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"""
@@ -228,11 +255,15 @@ Usage:
   python3 query_bib_rag.py --cite "claim you want evidence for"
   python3 query_bib_rag.py --cite "Eph receptors mediate axon guidance" --top 3
   python3 query_bib_rag.py --kb geo_rag "subduction zone"
+  python3 query_bib_rag.py "axon guidance" --export-bib refs.bib
+  python3 query_bib_rag.py --cite "claim" --export-bib refs.bib --offline-bib
 
 Options:
-  --cite    Find supporting citations for a claim
-  --top N   Return top N results (default: 5)
-  --kb NAME Switch knowledge base (bib_rag, geo_rag)
+  --cite          Find supporting citations for a claim
+  --top N         Return top N results (default: 5)
+  --kb NAME       Switch knowledge base (bib_rag, geo_rag)
+  --export-bib P  Also write a BibTeX References file for the results
+  --offline-bib   Synthesize entries from parent_store meta only (no network)
 
 Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
         """)
@@ -242,6 +273,8 @@ Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
     args = sys.argv[1:]
     cite_mode_flag = False
     top_k = 5
+    export_bib_path = ""
+    offline_bib = False
     query_parts = []
     
     i = 0
@@ -252,6 +285,12 @@ Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
         elif args[i] == "--top" and i + 1 < len(args):
             top_k = int(args[i + 1])
             i += 2
+        elif args[i] == "--export-bib" and i + 1 < len(args):
+            export_bib_path = args[i + 1]
+            i += 2
+        elif args[i] == "--offline-bib":
+            offline_bib = True
+            i += 1
         else:
             query_parts.append(args[i])
             i += 1
@@ -259,10 +298,12 @@ Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
     query = " ".join(query_parts)
     
     if cite_mode_flag:
-        cite_mode(query, top_k)
+        results = cite_mode(query, top_k)
     else:
         results = search(query, top_k)
         format_results(results, query)
+    if export_bib_path:
+        export_bib(results, export_bib_path, offline=offline_bib)
 
 
 if __name__ == "__main__":

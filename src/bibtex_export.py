@@ -256,11 +256,28 @@ def bibtex_from_meta(meta: Dict[str, str],
             else:
                 parts.append(p)
         authors = " and ".join(parts)
-    journal = (meta.get("journal") or "").strip()
+    journal_raw = meta.get("journal", "") or ""
+    journal = " ".join(journal_raw.split())  # collapse newlines/whitespace
+    # Scrape-noise guard: a real journal name is short and has no fragment
+    # junk. 'Research article Neuroscience S' came from a multi-line HTML
+    # scrape — when the collapsed string doesn't look like a journal, drop it
+    # (the entry falls back to @misc; Crossref online mode would fill it).
+    # Word-count and stopword checks catch concatenations of page fragments
+    # that pass the character-class regex.
+    _JOURNAL_STOP = ("research", "article", "preprint", "published", "volume",
+                     "issue", "copyright", "license", "available", "download")
+    if journal and (
+            len(journal) > 60
+            or len(journal.split()) > 5
+            or any(w in journal.lower().split() for w in _JOURNAL_STOP)
+            or not re.match(r"^[A-Za-z][A-Za-z0-9 .&'()-]+$", journal)):
+        journal = ""
     doi = normalize_doi(meta.get("doi", "") or "")
     last = author_lastname(meta=meta)
     key = make_bibtex_key(last, year, title, existing_keys)
     etype = "article" if journal else "misc"
+    if authors:
+        authors = bib_author_cleanup(authors)
     fields = [f"  title = {{{title}}}"]
     if authors:
         fields.append(f"  author = {{{authors}}}")
@@ -304,12 +321,42 @@ def load_paper_meta(parent_store_dir: str, source: str) -> Dict[str, str]:
     except (OSError, json.JSONDecodeError):
         return {}
     meta = (parents[0].get("meta", {}) or {}) if parents else {}
+    # Filename-derived fallbacks for known-bad meta shapes (metadata pipeline
+    # fills these properly via bind_zotero / backfill; until then the .bib
+    # must not inherit them): titles like "Last et al. - 2019 - Real Title"
+    # or "Last - 2005 - Real Title", years scraped wrong (eLife posts the
+    # submission year).
+    title = meta.get("title", "") or ""
+    # Zotero filename convention heads: "Surname et al. - YYYY - ",
+    # "Surname - YYYY - ", or bare "Surname - Title" (preprints). The head
+    # token contains no spaces, so real titles beginning with a capitalized
+    # word after " - " are stripped only when the stored title actually
+    # matches the source filename head (i.e. the scrape copied the filename).
+    def _strip_head(t: str) -> str:
+        m = re.match(r"^[A-Za-z][\w'\-]* et al\. - (?:\d{4} - )?", t) \
+            or re.match(r"^[A-Za-z][\w'\-]* - \d{4} - ", t)
+        if m:
+            return t[m.end():].strip()
+        # "Surname - Title" without year: only strip when a meta.key exists
+        # (bound record ⇒ title from the filename is plausible) — otherwise
+        # a legit title like "Eph - signaling" would be mangled.
+        m2 = re.match(r"^([A-Za-z][\w'\-]*) - (?=[A-Z])(.+)$", t)
+        if m2 and meta.get("key"):
+            return m2.group(2).strip()
+        return t
+    title = _strip_head(title)
+    year = str(meta.get("year", "") or "")
+    if not year:
+        m_y = re.search(r"\b(19|20)\d{2}\b", title)
+        if m_y:
+            year = m_y.group(0)
     return {
-        "title": meta.get("title", "") or "",
-        "year": str(meta.get("year", "") or ""),
+        "title": title,
+        "year": year,
         "journal": meta.get("journal", "") or "",
         "authors": meta.get("authors", "") or meta.get("author", "") or "",
         "doi": meta.get("doi", "") or "",
+        "key": meta.get("key", "") or "",
         "source": source,
     }
 
@@ -357,6 +404,33 @@ def export_answers_bib(sources: List[str], out_path: str, mailto: str = "",
             f.write("\n\n".join(entries) + "\n")
     return {"written": written, "skipped": skipped, "errors": errors,
             "out_path": out_path}
+
+
+def bib_author_cleanup(authors: str) -> str:
+    """Normalize an already-authored BibTeX author field.
+
+    Handles the two real shapes in parent_store meta:
+      'A, B; C, D' / 'A, B, C, D' (comma-split display form, e.g. Zotero
+      flattened) → 'A, B and C, D'; collapses newlines/extra whitespace.
+    Semicolon form is handled by bibtex_from_meta (PubMed style).
+    """
+    a = " ".join(str(authors or "").split())  # collapse newlines + doubles
+    if not a:
+        return a
+    if " and " in a:
+        return a  # already BibTeX form
+    if ";" in a:
+        return " and ".join(p.strip() for p in a.split(";") if p.strip())
+    # 'A, B, C, D' — comma-separated display list; pairwise join.
+    parts = [p.strip() for p in a.split(",") if p.strip()]
+    if len(parts) < 2:
+        return a
+    # Heuristic: Zotero flatten produced 'Last,First,Last,First' pairs →
+    # recombine into 'Last,First' chunks.
+    if len(parts) % 2 == 0:
+        pairs = [f"{parts[i]}, {parts[i+1]}" for i in range(0, len(parts), 2)]
+        return " and ".join(pairs)
+    return " and ".join(parts)
 
 
 # ---------------------------------------------------------------------------

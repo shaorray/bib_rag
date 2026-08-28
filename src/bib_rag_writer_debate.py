@@ -78,6 +78,10 @@ def search_bib_rag(query: str, top_k: int = 5) -> List[Dict]:
             "title": meta.get("title", ""),
             "year": meta.get("year", ""),
             "doi": meta.get("doi", ""),
+            # paperIdentity keys (P3): chunk meta carries them for the
+            # multi-identifier Zotero verification in search_zotero.
+            "pmid": meta.get("pmid", ""),
+            "pmcid": meta.get("pmcid", ""),
             "section": meta.get("section", ""),
             "similarity": sim,
         })
@@ -242,8 +246,10 @@ def debate_with_llm(topic: str, passages: List[Dict]) -> Dict:
         sentences = text.split('. ')
         first_sentence = sentences[0] if sentences else text[:200]
         
-        # Get citation info
-        zotero = search_zotero(p["title"], p["doi"])
+        # Get citation info (multi-identifier: PMID/PMCID ride along when the
+        # chunk meta carries them — exact registry match beats title fuzzy).
+        zotero = search_zotero(p["title"], p["doi"],
+                               pmid=p.get("pmid", ""), pmcid=p.get("pmcid", ""))
         cite_inline, year, _ = get_cite_inline(zotero, p)
         
         context_parts.append(
@@ -366,7 +372,9 @@ def synthesize_with_llm(topic: str, passages: List[Dict], style: str = "APA"):
     
     # Get citations for each source
     for i, passage in enumerate(passages, 1):
-        zotero = search_zotero(passage["title"], passage["doi"])
+        zotero = search_zotero(passage["title"], passage["doi"],
+                               pmid=passage.get("pmid", ""),
+                               pmcid=passage.get("pmcid", ""))
         cite_inline, year, full_ref = get_cite_inline(zotero, passage)
         
         if full_ref:
@@ -395,7 +403,9 @@ def basic_synthesize(passages: List[Dict], style: str = "APA"):
     citations = []
     
     for i, passage in enumerate(passages[:3], 1):
-        zotero = search_zotero(passage["title"], passage["doi"])
+        zotero = search_zotero(passage["title"], passage["doi"],
+                               pmid=passage.get("pmid", ""),
+                               pmcid=passage.get("pmcid", ""))
         cite_inline, year, full_ref = get_cite_inline(zotero, passage)
         
         if full_ref:

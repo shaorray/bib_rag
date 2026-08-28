@@ -751,6 +751,36 @@ def test_bibtex_author_lastname():
     print("  ✓ author_lastname: Crossref style + filename fallback")
 
 
+def test_bibtex_meta_cleanup(tmpdir):
+    """load_paper_meta + bibtex_from_meta must not inherit scrape noise:
+    filename-prefix titles, multi-line journal fragments, Zotero-flattened
+    author lists."""
+    from src.bibtex_export import load_paper_meta, bibtex_from_meta
+    store = str(tmpdir)
+    with open(os.path.join(store, "Smith_et_al__-_2019_-_A_Great_Paper_md.json"), "w") as f:
+        json.dump([{"parent_id": "x#full#y", "source": "Smith_et_al__-_2019_-_A_Great_Paper.md",
+                    "section": "full_text", "content": "x", "word_count": 1, "char_count": 1,
+                    "meta": {
+                        "title": "Smith et al. - 2019 - A Great Paper",
+                        "authors": "Smith, John, Doe, Jane, Roe, Richard",
+                        "journal": "Research article \n\nNeuroscience \n\nS",
+                        "year": "2019", "doi": "10.1234/xyz"}}], f)
+    meta = load_paper_meta(store, "Smith_et_al__-_2019_-_A_Great_Paper.md")
+    assert meta["title"] == "A Great Paper", meta["title"]
+    e = bibtex_from_meta(meta, set())
+    assert e is not None
+    from src.bibtex_export import bibtex_fields
+    f = bibtex_fields(e)
+    assert f["author"] == "Smith, John and Doe, Jane and Roe, Richard", f["author"]
+    assert "journal" not in f, f        # scrape junk dropped → @misc
+    assert e.startswith("@misc{")
+    # legit journal passes through
+    meta2 = dict(meta, journal="Nature Neuroscience")
+    e2 = bibtex_from_meta(meta2, set())
+    assert "journal = {Nature Neuroscience}" in e2, e2
+    print("  ✓ meta cleanup: filename title stripped, Zotero authors joined, journal noise dropped")
+
+
 def test_bibtex_load_paper_meta_dual_paths(tmpdir):
     """Accepts both source filename and store filename; PMID-style stores too."""
     from src.bibtex_export import load_paper_meta
