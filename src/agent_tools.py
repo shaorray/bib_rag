@@ -175,7 +175,7 @@ class ToolFactory:
 
         Hybrid retrieval (DocsGPT/seerai mechanism): dense bge-m3 results are
         fused with BM25 (FTS5 index via hybrid_search.HybridIndex) using RRF
-        (k=60). Gene symbols and receptor names (Ephb1, ephrin-B1) are exact
+        (k=60). Gene symbols and receptor names (Myc, Notch1) are exact
         lexical signals that dense embeddings often miss; BM25 catches them.
         When the FTS index is empty or errors, falls back to dense-only
         silently — the agent never breaks because BM25 is missing.
@@ -419,33 +419,6 @@ def create_tools(collection=None):
 
     return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents,
             find_papers_citing, get_paper_references]
-
-
-def create_tools_legacy(collection=None) -> List:
-    """
-    Legacy: Create tool dicts with name, description, and callable.
-    
-    Returns list of tool dicts for non-LangGraph use.
-    """
-    factory = ToolFactory(collection)
-    
-    return [
-        {
-            "name": "search_child_chunks",
-            "description": "Search for relevant small child chunks in the document database. Returns excerpts with parent IDs for full context retrieval.",
-            "func": factory.search_child_chunks
-        },
-        {
-            "name": "retrieve_parent_chunks",
-            "description": "Retrieve full parent chunk by parent_id. Use after search_child_chunks to get complete context.",
-            "func": factory.retrieve_parent_chunks
-        },
-        {
-            "name": "retrieve_many_parents",
-            "description": "Retrieve multiple parent chunks at once by their IDs.",
-            "func": factory.retrieve_many_parents
-        }
-    ]
 
 
 if __name__ == "__main__":

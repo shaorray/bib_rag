@@ -22,6 +22,11 @@ from datetime import datetime
 import requests
 from langchain_community.vectorstores import Chroma
 
+# ─── Multi-KB config ─────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kb_config import get_config
+_CFG = get_config()
+
 # Optional temp-dir override (e.g. a larger scratch disk) via BIB_RAG_TMPDIR;
 # otherwise the system default applies.
 import tempfile
@@ -30,11 +35,6 @@ _tmp_override = _lib_setting(_CFG["data_root"], "tmpdir")
 if _tmp_override and os.path.isdir(_tmp_override):
     tempfile.tempdir = _tmp_override
     os.environ["TMPDIR"] = _tmp_override
-
-# ─── Multi-KB config ─────────────────────────────────────────────────────
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_config import get_config
-_CFG = get_config()
 KB_ROOT = _CFG["kb_root"]
 CHROMA_DB_PATH = _CFG["chroma_path"]
 PARENT_STORE_DIR = _CFG["parent_store_dir"]
@@ -42,195 +42,23 @@ METADATA_LOG = _CFG["metadata_log"]
 CHECKPOINT_FILE = _CFG["checkpoint_file"]
 BIB_RAG_EMBED_URL = _CFG["embed_url"]
 
+# ============== Text Processing ==============
+# Chunking/cleaning logic lives in chunking.py (shared with build_hierarchical
+# incremental index + index_single_paper) — single source of truth, so a full
+# rebuild and incremental adds always produce identical chunk structure.
+
+from chunking import (
+    clean_text, truncate_at_references, extract_meta, extract_sections,
+    split_into_paragraphs, create_child_chunks, create_parent_chunks,
+    save_parent_store,
+    CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE,
+)
+
 # ============== Parent/Child Configuration ==============
 
-CHILD_CHUNK_SIZE = 500
-CHILD_CHUNK_OVERLAP = 100
-MIN_PARENT_SIZE = 200
 MAX_PARENT_SIZE = 4000
 BATCH_EMBED_SIZE = 16  # Reduced from 32 to avoid llama-server timeout errors
-MAX_CHUNK_TOKENS = 1000  # Maximum tokens per chunk before truncation
-
-# ============== Text Processing ==============
-
-def clean_text(text):
-    lines = text.split('\n')
-    cleaned = []
-    for line in lines:
-        if '==> image' in line.lower() or '==> picture' in line.lower(): continue
-        if line.strip().startswith('©') and 'rights reserved' in line: continue
-        if 'As a library, NLM provides access' in line: continue
-        cleaned.append(line)
-    return '\n'.join(cleaned)
-
-def truncate_at_references(text):
-    lines = text.split('\n'); cutoff = len(lines)
-    for i, line in enumerate(lines):
-        if re.match(r'^#*\s*(REFERENCES?|BIBLIOGRAPHY|ACKNOWLEDGMENTS?|SUPPLEMENTARY|APPENDIX|DATA AVAILABILITY|CONFLICT OF INTEREST|AUTHOR CONTRIBUTIONS?)\s*$', line, re.I):
-            cutoff = i; break
-    return '\n'.join(lines[:cutoff])
-
-def extract_meta(text, filename):
-    meta = {'title': '', 'authors': '', 'year': '', 'journal': '', 'doi': '', 'pmid': '', 'pmcid': ''}
-    m = re.search(r'PMID:\s*(\d+)', text)
-    if m: meta['pmid'] = m.group(1)
-    m = re.search(r'PMCID:\s*(PMC\d+)', text)
-    if m: meta['pmcid'] = m.group(1)
-    m = re.search(r'(?:doi:|DOI:|https?://doi\.org/)(10\.\S+)', text)
-    if m: meta['doi'] = m.group(1)
-    m = re.search(r'\b(19\d{2}|20\d{2})\b', text)
-    if m: meta['year'] = m.group(1)
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    # Prefer the first non-empty line as title (matches what front-matter injectors write),
-    # but only if it's a plausible title (20-300 chars, doesn't look like a metadata field).
-    if lines and 20 < len(lines[0]) < 300 and not lines[0].startswith(('Title:', 'Authors:', 'Year:', 'Journal:', 'doi:', 'PMID:', 'PMCID:', 'BibKey:', '#')):
-        meta['title'] = lines[0]
-    # Fall back to filename stem, but only if it's a reasonable title length
-    # (avoid long filenames like 'Lastname_2025_Very long title that exceeds the 300 char cutoff.pdf').
-    name = re.sub(r'^[\+\^\s]+', '', Path(filename).stem)
-    name = re.sub(r'\.pdf$', '', name)  # strip .pdf from stem
-    if not meta['title'] and 10 < len(name) <= 200:
-        meta['title'] = name
-    m = re.search(r'^([A-Z][A-Za-z\s\&\.]+)\s*\.?\s*\d{4}', text, re.M)
-    if m: meta['journal'] = m.group(1).strip()
-    return meta
-
-# ============== Hierarchical Chunking ==============
-
-def extract_sections(text):
-    """Split text into sections by headers."""
-    sections = {}; lines = text.split('\n')
-    current = None; content = []
-    patterns = {
-        'abstract': r'^#*\s*(ABSTRACT|SUMMARY)\s*$',
-        'introduction': r'^#*\s*(INTRODUCTION|BACKGROUND)\s*$',
-        'methods': r'^#*\s*(METHODS?|MATERIALS?|EXPERIMENTAL)\s*',
-        'results': r'^#*\s*(RESULTS?|FINDINGS?)\s*$',
-        'discussion': r'^#*\s*DISCUSSION\s*$',
-        'conclusion': r'^#*\s*CONCLUSIONS?\s*$',
-    }
-    for line in lines:
-        matched = False
-        for sec_name, pat in patterns.items():
-            if re.match(pat, line, re.I):
-                if current and content: 
-                    sections[current] = '\n'.join(content).strip()
-                current = sec_name; content = []; matched = True; break
-        if not matched and current: 
-            content.append(line)
-    if current and content: 
-        sections[current] = '\n'.join(content).strip()
-    return sections
-
-def split_into_paragraphs(text):
-    """Split text into paragraphs."""
-    return [p.strip() for p in text.split('\n\n') if p.strip()]
-
-def create_child_chunks(parent_text, parent_id, source, section, 
-                        chunk_size=CHILD_CHUNK_SIZE, overlap=CHILD_CHUNK_OVERLAP):
-    """Split parent text into small overlapping child chunks."""
-    paragraphs = split_into_paragraphs(parent_text)
-    if not paragraphs:
-        return []
-    
-    chunks = []
-    current_text = ""
-    
-    for para in paragraphs:
-        para_len = len(para)
-        
-        # If single paragraph exceeds chunk size, split by sentences
-        if para_len > chunk_size * 1.5:
-            sentences = re.split(r'(?<=[.!?])\s+', para)
-            for sent in sentences:
-                if len(current_text) + len(sent) > chunk_size and current_text:
-                    chunks.append({
-                        'text': current_text.strip(),
-                        'parent_id': parent_id,
-                        'source': source,
-                        'section': section,
-                        'idx': len(chunks)
-                    })
-                    words = current_text.split()
-                    overlap_words = max(1, overlap // 5)
-                    overlap_text = ' '.join(words[-overlap_words:]) if len(words) > overlap_words else ""
-                    current_text = overlap_text + ' ' + sent if overlap_text else sent
-                else:
-                    current_text += ' ' + sent if current_text else sent
-        else:
-            if len(current_text) + para_len > chunk_size and current_text:
-                chunks.append({
-                    'text': current_text.strip(),
-                    'parent_id': parent_id,
-                    'source': source,
-                    'section': section,
-                    'idx': len(chunks)
-                })
-                words = current_text.split()
-                overlap_words = max(1, overlap // 5)
-                overlap_text = ' '.join(words[-overlap_words:]) if len(words) > overlap_words else ""
-                current_text = overlap_text + ('\n\n' if overlap_text else '') + para
-            else:
-                current_text += ('\n\n' if current_text else '') + para
-    
-    if current_text.strip():
-        chunks.append({
-            'text': current_text.strip(),
-            'parent_id': parent_id,
-            'source': source,
-            'section': section,
-            'idx': len(chunks)
-        })
-    
-    return chunks
-
-def create_parent_chunks(text, source, meta):
-    """Create parent chunks from text sections."""
-    sections = extract_sections(text)
-    
-    if not sections:
-        sections = {'full_text': text}
-    
-    parents = []
-    for sec_name, sec_text in sections.items():
-        if not sec_text.strip():
-            continue
-        
-        if len(sec_text) < MIN_PARENT_SIZE:
-            continue
-        
-        content_hash = hashlib.md5(f"{source}:{sec_name}:{sec_text[:200]}".encode()).hexdigest()[:16]
-        parent_id = f"{source}#{sec_name}#{content_hash}"
-        
-        parent = {
-            'parent_id': parent_id,
-            'source': source,
-            'section': sec_name,
-            'content': sec_text,
-            'word_count': len(sec_text.split()),
-            'char_count': len(sec_text),
-            'meta': {
-                'title': meta.get('title', ''),
-                'authors': meta.get('authors', ''),
-                'year': meta.get('year', ''),
-                'journal': meta.get('journal', ''),
-                'doi': meta.get('doi', ''),
-                'pmid': meta.get('pmid', ''),
-                'pmcid': meta.get('pmcid', '')
-            }
-        }
-        parents.append(parent)
-    
-    return parents
-
-def save_parent_store(parents, source):
-    """Save parent chunks as JSON file."""
-    os.makedirs(PARENT_STORE_DIR, exist_ok=True)
-    safe_name = re.sub(r'[^\w\-]', '_', source)[:100]
-    filepath = os.path.join(PARENT_STORE_DIR, f"{safe_name}.json")
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(parents, f, ensure_ascii=False, indent=2)
-    return filepath
+MAX_CHUNK_TOKENS=1000  # Maximum tokens per chunk before truncation
 
 # ============== GPU Embedding ==============
 
@@ -394,7 +222,7 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
                         'meta': meta
                     }]
                 
-                save_parent_store(parents, fp.name)
+                save_parent_store(parents, fp.name, PARENT_STORE_DIR)
                 stats['parents'] += len(parents)
                 stats['papers_with_parents'] += 1
                 

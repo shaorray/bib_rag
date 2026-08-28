@@ -205,7 +205,7 @@ def check_index_drift(cfg: dict, strict: bool = False) -> List[CheckResult]:
                 "ps_unvectorized", WARN,
                 f"{len(missing)} parent_store file(s) with NO chroma chunks "
                 "(ingested but never embedded)",
-                remedy="python3 scripts/build_hierarchical.py (or index_single_paper.py per paper)",
+                remedy="python3 -B add_papers.py <pdf-or-dir> (incremental via index_single_paper.py)",
                 details=sorted(missing)[:10]))
         else:
             out.append(CheckResult("ps_unvectorized", OK,

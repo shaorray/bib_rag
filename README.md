@@ -254,7 +254,7 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   ├── kb_config.py            ← SINGLE PATH-RESOLUTION POINT: registry + BIB_RAG_* env
 │   ├── agentic_graph.py · agent_nodes.py · agent_edges.py ← LangGraph pipeline
 │   ├── agent_prompts.py · agent_schemas.py · agent_tools.py ← prompts / state / retrieval tools
-│   ├── build_hierarchical_gpu.py · build_hierarchical.py · index_single_paper.py · chunking.py ← index build
+│   ├── build_hierarchical_gpu.py · index_single_paper.py · chunking.py ← index build
 │   ├── query_bib_rag.py        ← Quick semantic search & citations
 │   ├── bib_rag_writer.py · bib_rag_writer_debate.py · bib_rag_grill.py ← writers with citations
 │   ├── parent_store_manager.py ← Parent chunk loader

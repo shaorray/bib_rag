@@ -5,7 +5,7 @@ Shared text-processing + hierarchical chunking logic for bib_rag.
 Single source of truth for clean_text / truncate_at_references / extract_meta /
 extract_sections / split_into_paragraphs / create_child_chunks /
 create_parent_chunks / save_parent_store. Imported by both
-build_hierarchical.py and index_single_paper.py so chunking stays consistent
+build_hierarchical_gpu.py and index_single_paper.py so chunking stays consistent
 across all indexing entry points.
 
 Chunking config lives here so every caller uses the same sizes.
@@ -77,9 +77,16 @@ def extract_meta(text, filename):
     m = re.search(r'\b(19\d{2}|20\d{2})\b', text)
     if m: meta['year'] = m.group(1)
     lines = [l.strip() for l in text.split('\n') if l.strip()]
-    if lines and 20 < len(lines[0]) < 300: meta['title'] = lines[0]
+    # Prefer the first non-empty line as title (matches what front-matter injectors write),
+    # but only if it's a plausible title (20-300 chars, doesn't look like a metadata field).
+    if lines and 20 < len(lines[0]) < 300 and not lines[0].startswith(('Title:', 'Authors:', 'Year:', 'Journal:', 'doi:', 'PMID:', 'PMCID:', 'BibKey:', '#')):
+        meta['title'] = lines[0]
+    # Fall back to filename stem, but only if it's a reasonable title length
+    # (avoid long filenames like 'Lastname_2025_Very long title that exceeds the 300 char cutoff.pdf').
     name = re.sub(r'^[\+\^\s]+', '', Path(filename).stem)
-    if len(name) > 10 and (not meta['title'] or len(name) > len(meta['title'])): meta['title'] = name
+    name = re.sub(r'\.pdf$', '', name)  # strip .pdf from stem
+    if not meta['title'] and 10 < len(name) <= 200:
+        meta['title'] = name
     m = re.search(r'^([A-Z][A-Za-z\s\&\.]+)\s*\.?\s*\d{4}', text, re.M)
     if m: meta['journal'] = m.group(1).strip()
     return meta
