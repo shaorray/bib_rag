@@ -45,7 +45,9 @@ from odf.opendocument import OpenDocumentText
 from odf.text import P, H
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from kb_config import get_config
+import zotero_access  # noqa: E402  (MCP-first Zotero access; used by --no-llm citations + debate context)
 
 # === Paths ===
 _CFG = get_config()
@@ -460,6 +462,11 @@ def main():
     parser.add_argument("topic", nargs="?", help="Raw topic sentence")
     parser.add_argument("--auto", action="store_true", help="Auto-fill the spec via LLM (skip interactive grill)")
     parser.add_argument("--spec", help="Path to a saved GrillSpec JSON (skip grilling entirely)")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="Deterministic template synthesis (no LLM; merged from bib_rag_writer.py)")
+    parser.add_argument("--debate", action="store_true",
+                        help="Debate backend: LLM analyzes passage relationships before synthesis "
+                             "(merged from bib_rag_writer_debate.py)")
     parser.add_argument("--top", type=int, default=5, help="Number of passages to retrieve")
     parser.add_argument("--output", help="Output .odt path (default: <library>/outputs/grill_<ts>.odt)")
     parser.add_argument("--save-spec", help="Save the spec to this path (default: /tmp/bib_rag_grill_specs/<ts>.json)")
@@ -508,24 +515,36 @@ def main():
     for i, p in enumerate(passages, 1):
         print(f"  [{i}] {p['title'][:60]} (sim={p['similarity']:.3f})")
 
-    # Use the LLM to write the paragraph given the spec + passages
-    print(f"\n✍️  Writing paragraph (spec-aware, glossary-constrained)…")
-    paragraph = synthesize_with_spec(passages, spec, glossary)
-
-    # Enforce anti-patterns from CONTEXT.md
-    paragraph = enforce_glossary(paragraph, glossary)
+    # Synthesis backend dispatch: --no-llm | --debate | default (spec-aware LLM)
+    if args.no_llm:
+        print(f"\n✍️  Writing paragraph (--no-llm template mode)…")
+        paragraph, cits = synthesize_no_llm(passages, spec, glossary)
+    elif args.debate:
+        print(f"\n辩论  Phase B2: debate analysis of passage relationships…")
+        debate = debate_analysis(passages, spec)
+        if "main_thesis" in debate:
+            print(f"   main thesis: {debate['main_thesis'][:100]}")
+            print(f"   relationships: {len(debate.get('relationships', []))}")
+        paragraph, cits = synthesize_from_debate(debate, passages, spec, glossary)
+        paragraph = enforce_glossary(paragraph, glossary)
+    else:
+        print(f"\n✍️  Writing paragraph (spec-aware, glossary-constrained)…")
+        paragraph = synthesize_with_spec(passages, spec, glossary)
+        cits = None
+        # Enforce anti-patterns from CONTEXT.md
+        paragraph = enforce_glossary(paragraph, glossary)
+        # Citation harvesting (lightweight — use top 3 unique titles)
+        seen, cits = set(), []
+        for p in passages[:3]:
+            if p["title"] not in seen:
+                seen.add(p["title"])
+                cits.append(f"{p['title']} ({p['year']}) — DOI: {p['doi']}")
 
     print(f"\n{'='*70}")
     print("GENERATED PARAGRAPH:")
     print(f"{'='*70}")
     print(paragraph)
 
-    # Citation harvesting (lightweight — use top 3 unique titles)
-    seen, cits = set(), []
-    for p in passages[:3]:
-        if p["title"] not in seen:
-            seen.add(p["title"])
-            cits.append(f"{p['title']} ({p['year']}) — DOI: {p['doi']}")
     print(f"\n{'='*70}")
     print("REFERENCES (auto-harvested from retrieval):")
     print(f"{'='*70}")
@@ -604,6 +623,185 @@ Write ONLY the paragraph (no headers, no preamble)."""
             f"tissue={spec.get('tissue_context') or spec.get('tissue') or 'general'}, "
             f"stance={spec.get('model_stance') or 'neutral'}).")
         return fallback
+
+
+# ---------------------------------------------------------------------------
+# Synthesis backends (--no-llm template mode, --debate relational backend)
+# Merged from bib_rag_writer.py (template assembly) and
+# bib_rag_writer_debate.py (relational debate analysis).
+# ---------------------------------------------------------------------------
+
+def _clean_title(title: str) -> str:
+    """Strip 'Author et al. - Year - ' prefixes from retrieval titles."""
+    return re.sub(r"^.*?\d{4}\s*-\s*", "", title) if " - " in title else title
+
+
+def _inline_citation(passage: Dict) -> tuple:
+    """(inline_cite, year, full_ref) — Zotero metadata preferred, filename fallback.
+    Sanity-guards the Zotero hit: a wrong-library match is worse than filename
+    extraction, so title overlap or DOI must corroborate before trusting it."""
+    ref_title = _clean_title(passage["title"])
+    ref_words = set(re.findall(r"[a-z]{4,}", ref_title.lower()))
+    ref_year_m = re.search(r"\b(19\d{2}|20\d{2})\b", passage["title"])
+
+    zot = None
+    if passage.get("title"):
+        for cand in zotero_access.zotero_search(passage["title"], limit=3):
+            cand_title = (cand.get("title") or "").lower()
+            overlap = len(set(re.findall(r"[a-z]{4,}", cand_title)) & ref_words)
+            cand_year = (cand.get("year") or "").strip()
+            doi_match = (cand.get("doi") and passage.get("doi")
+                         and cand.get("doi") == passage.get("doi"))
+            if overlap >= 4 or doi_match or (ref_year_m and cand_year == ref_year_m.group(1)):
+                zot = cand
+                if zot.get("key"):
+                    full = zotero_access.zotero_item(zot["key"]) or {}
+                    zot = {**zot, **{k: v for k, v in full.items() if v}}
+                break
+
+    authors = (zot or {}).get("authors", "")
+    title = passage["title"]
+    year = (zot or {}).get("year") or (ref_year_m.group(1) if ref_year_m else "") or passage.get("year") or "n.d."
+    if authors:
+        first_author = authors.split(",")[0].strip()
+        first_author = re.sub(r"\s+et\s+al\.?$", "", first_author).strip()
+        parts = first_author.split()
+        last_name = parts[-1] if parts else first_author
+        inline = f"{last_name} et al." if ("et al." in authors or " and " in authors) else last_name
+    elif " et al." in title:
+        first_author = title.split(" et al.")[0].strip()
+        parts = first_author.split()
+        inline = f"{parts[-1] if parts else 'Unknown'} et al."
+    elif " - " in title:
+        parts0 = title.split(" - ")[0].strip().split()
+        inline = parts0[-1] if parts0 else "Unknown"
+    else:
+        words = title.split()
+        inline = words[0] if words else "Unknown"
+    full_ref = (f"{inline} ({year}). {ref_title}. {passage.get('doi') or ''}").strip()
+    return inline, year, full_ref
+
+
+def synthesize_no_llm(passages: List[Dict], spec: Dict, glossary: Dict) -> tuple:
+    """--no-llm backend: deterministic template assembly (from bib_rag_writer.py,
+    generalized — no domain-specific sentence templates). Returns (paragraph, citations)."""
+    seen, unique = set(), []
+    for p in passages:
+        k = f"{p['title']}_{p['year']}"
+        if k not in seen:
+            seen.add(k)
+            unique.append(p)
+
+    citations = []
+    sentences = []
+    stance = (spec.get("stance_phrasing")
+              or f"evidence on {spec.get('mechanism_focus') or 'the topic'}")
+
+    for i, p in enumerate(unique[:3], 1):
+        inline, year, full_ref = _inline_citation(p)
+        citations.append(full_ref)
+        first_sent = (p["text"].split(". ")[0] or p["text"][:150]).strip().rstrip(".")
+        claim = first_sent[0].lower() + first_sent[1:] if first_sent else "see cited work"
+        if i == 1:
+            sentences.append(f"{inline} ({year}) reported that {claim}."
+                             if first_sent else f"{inline} ({year}) investigated {spec.get('mechanism_focus') or 'the topic'}.")
+        elif i == 2:
+            sentences.append(f"In a related line of evidence, {inline} ({year}) found that {claim}.")
+        else:
+            sentences.append(f"Collectively, these findings ({inline}, {year}) "
+                             f"are consistent with {stance}.")
+    paragraph = " ".join(sentences)
+    # collapse any doubled periods left from claim text
+    paragraph = re.sub(r"\.\s*\.", ".", paragraph)
+    return paragraph, citations
+
+
+def debate_analysis(passages: List[Dict], spec: Dict) -> Dict:
+    """--debate backend (from bib_rag_writer_debate.py): LLM analyzes relationships
+    between passages (agree/contradict/complement/extend) into structured JSON.
+    Uses spec to steer the analysis."""
+    stance = spec.get("stance_phrasing") or spec.get("model_stance") or "neutral survey"
+    mechanism = spec.get("mechanism_focus") or "the mechanism of interest"
+
+    context_parts = []
+    for i, p in enumerate(passages, 1):
+        inline, year, _ = _inline_citation(p)
+        first_sentence = p["text"].split(". ")[0] if p["text"] else p["text"][:200]
+        context_parts.append(
+            f"SOURCE [{i}]: {inline} ({year})\n"
+            f"Key finding: {first_sentence}\n"
+            f"Full excerpt: {p['text'][:400]}...\n---")
+    context = "\n".join(context_parts)
+
+    prompt = f"""You are an expert academic synthesizer. Analyze these research sources about "{spec.get('raw_topic', '')}" and produce a structured synthesis.
+
+{context}
+
+INSTRUCTIONS:
+1. Identify the MAIN CLAIM from each source
+2. Describe how the claims RELATE (agree, contradict, complement, extend)
+3. Identify GAPS or UNRESOLVED QUESTIONS relative to the required stance
+4. Output this exact JSON format:
+
+{{
+    "main_thesis": "One-sentence synthesis of the overall finding",
+    "claims": [
+        {{"source_num": 1, "claim": "...", "evidence_type": "experimental/theoretical/review", "key_mechanism": "..."}}
+    ],
+    "relationships": [
+        {{"between": [1, 2], "relation": "agree/contradict/complement/extend", "description": "..."}}
+    ],
+    "narrative_flow": [
+        "Sentence 1: ...", "Sentence 2: ...", "Sentence 3: ...", "Sentence 4: ..."
+    ]
+}}
+
+Requirements:
+- Required stance: {stance}; mechanism focus: {mechanism}
+- Use specific relational language: "consistent with", "in contrast to", "building upon", "challenges", "extends"
+- Cite sources as [1], [2] in narrative_flow
+- Identify what each paper CONTRIBUTES to the overall picture
+
+Output ONLY the JSON, no markdown fences."""
+
+    raw = call_llm([{"role": "user", "content": prompt}],
+                   max_tokens=2000, temperature=0.3, timeout=180)
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+    return {"raw_response": raw}
+
+
+def synthesize_from_debate(debate: Dict, passages: List[Dict], spec: Dict,
+                           glossary: Dict) -> tuple:
+    """Turn debate_analysis's structured output into a paragraph + citations.
+    (From bib_rag_writer_debate.py's synthesis stage.)"""
+    # narrative_flow sentences carry [N] markers — keep them, map to references
+    flow = debate.get("narrative_flow") or []
+    sentences = [s.split(": ", 1)[-1] if re.match(r"^Sentence \d+:\s*", s) else s
+                 for s in flow]
+    paragraph = " ".join(sentences) if sentences else \
+        synthesize_no_llm(passages, spec, glossary)[0]
+
+    # citations = sources referenced in the debate, in citation order
+    used = sorted({int(n) for r_ in debate.get("relationships", [])
+                   for n in r_.get("between", []) if isinstance(n, int)} |
+                  {int(m.group(1)) for s_ in sentences
+                   for m in re.finditer(r"\[(\d+)\]", s_)})
+    citations = []
+    for n in sorted(set(used)) if used else []:
+        if 1 <= n <= len(passages):
+            p = passages[n - 1]
+            _, _, full_ref = _inline_citation(p)
+            citations.append(full_ref)
+    if not citations:
+        for p in passages[:3]:
+            _, _, full_ref = _inline_citation(p)
+            citations.append(full_ref)
+    return paragraph, citations
 
 
 if __name__ == "__main__":

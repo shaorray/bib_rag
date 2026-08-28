@@ -256,7 +256,9 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   ├── agent_prompts.py · agent_schemas.py · agent_tools.py ← prompts / state / retrieval tools
 │   ├── build_hierarchical_gpu.py · index_single_paper.py · chunking.py ← index build
 │   ├── query_bib_rag.py        ← Quick semantic search & citations
-│   ├── bib_rag_writer.py · bib_rag_writer_debate.py · bib_rag_grill.py ← writers with citations
+│   ├── bib_rag_grill.py        ← PARAGRAPH COMPOSER: grill→retrieve→synthesize (backends:
+│   │     default LLM · --no-llm template · --debate relational; ODT + citations)
+│   │     (bib_rag_writer.py · bib_rag_writer_debate.py = deprecated shims → grill)
 │   ├── parent_store_manager.py ← Parent chunk loader
 │   └── evaluate.py · test_comprehensive.py · test_agentic_graph.py ← eval & tests
 │
