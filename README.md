@@ -124,7 +124,7 @@ registry line in `src/kb_config.py`).
 
 ---
 
-## Agentic RAG (v2.0)
+## Agentic RAG
 
 Full LangGraph-powered agentic pipeline with hierarchical retrieval, context compression, and conversation memory.
 
@@ -240,13 +240,14 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 ├── scripts/setup_library.py    ← Scaffold + register a new library (one command)
 │
 ├── scripts/                    ← Utilities & pipelines
-│   ├── meta_audit.py           ← Metadata proof-reader + genuine-info fetcher
-│   ├── bib_to_parent_store.py · fill_meta_key_in_parent_store.py ← fill meta from My Library.bib
+│   ├── metadata/               ← METADATA FIXATION PIPELINE (see metadata/README.md):
+│   │     backfill_metadata · bib_to_parent_store · fill_meta_key · meta_audit (Crossref/PubMed/OpenAlex)
+│   │     apply_tags · migrate_topics ← classification tags; sources: BibTeX snapshot > live Zotero > registries
+│   ├── classify_papers.py      ← LLM tagging (article_type + open-vocab topics, 3 input modes)
 │   ├── bib_utils.py            ← Shared normalization / .bib / filename helpers
 │   ├── zotero_access.py        ← Zotero access layer (MCP first, HTTP fallback)
-│   ├── test_utilities.py       ← Regression tests (no network)
-│   ├── classify_papers.py · backfill_metadata.py · apply_tags.py · migrate_topics.py ← classification pipeline (domain-agnostic)
 │   ├── remove_paper.py · setup_library.py ← library lifecycle
+│   └── test_utilities.py       ← Regression tests (no network)
 │   └── archive_project_specific/ ← superseded one-off corpus scripts (provenance only)
 │
 ├── src/                        ← RAG library & query/writer tools

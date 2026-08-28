@@ -38,7 +38,9 @@ from pathlib import Path
 
 from bib_utils import normalize_doi
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/ (bib_utils, zotero_access)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from kb_config import get_config
 
 _CFG = get_config()
