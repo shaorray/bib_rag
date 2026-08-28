@@ -241,6 +241,19 @@ def fallback_response(state: AgentState, llm):
 
     context_summary = state.get("context_summary", "").strip()
 
+    # Evidence gate (ragent mechanism, zero LLM): audit whether the session's
+    # retrievals actually produced evidence, and force the fallback answer to
+    # say so when they didn't. Env kill-switch: EVIDENCE_GATE=0.
+    gate_note = ""
+    coverage = {}
+    if os.environ.get("EVIDENCE_GATE", "1") != "0":
+        try:
+            from .evidence_gate import evidence_coverage, gap_instruction, coverage_block
+            coverage = evidence_coverage(state["messages"], state.get("retrieval_keys", set()))
+            gate_note = gap_instruction(coverage)
+        except Exception:
+            gate_note = ""  # gate must never break answering
+
     context_parts = []
     if context_summary:
         context_parts.append(
@@ -259,7 +272,9 @@ def fallback_response(state: AgentState, llm):
     prompt_content = (
         f"USER QUERY: {state.get('question')}\n\n"
         f"{context_text}\n\n"
-        f"INSTRUCTION:\nProvide the best possible answer using only the data above."
+        f"INSTRUCTION:\n"
+        f"Provide the best possible answer using only the data above."
+        + (f"\n\n{gate_note}" if gate_note else "")
     )
     response = llm.invoke(
         [
@@ -267,7 +282,15 @@ def fallback_response(state: AgentState, llm):
             HumanMessage(content=prompt_content),
         ]
     )
-    return {"messages": [response]}
+    answer = response.content
+    if coverage and os.environ.get("EVIDENCE_GATE", "1") != "0":
+        try:
+            cb = coverage_block(coverage)
+            if cb:
+                answer = answer.rstrip() + "\n\n" + cb
+        except Exception:
+            pass
+    return {"messages": [AIMessage(content=answer)]}
 
 
 def should_compress_context(state: AgentState) -> Command[Literal["compress_context", "orchestrator"]]:
@@ -382,6 +405,12 @@ def compress_context(state: AgentState, llm):
 def collect_answer(state: AgentState):
     """Extract the final answer from the last AI message.
 
+    Runs the deterministic citation guard (zero LLM) before returning:
+    the Sources section is whitelisted against retrieval_keys (paper-qa
+    mechanism) and lexically spot-checked against the cited parents
+    (LumiCite/citelocal-agent cheap tier). Env kill-switch:
+    CITATION_GUARD=0 disables the guard entirely.
+
     Args:
         state: Current AgentState
 
@@ -391,8 +420,19 @@ def collect_answer(state: AgentState):
     last_message = state["messages"][-1]
     is_valid = isinstance(last_message, AIMessage) and last_message.content and not last_message.tool_calls
     answer = last_message.content if is_valid else "Unable to generate an answer."
+    guard_note = ""
+    if is_valid and os.environ.get("CITATION_GUARD", "1") != "0":
+        try:
+            from .citation_guard import enforce_citation_guard
+            answer, report = enforce_citation_guard(answer, state.get("retrieval_keys", set()))
+            if report.get("dropped"):
+                guard_note = f"[citation_guard] removed {report['dropped']} unverifiable source line(s)"
+        except Exception as e:  # guard must never break answering
+            guard_note = f"[citation_guard] skipped ({type(e).__name__})"
+
     return {
         "final_answer": answer,
+        "guard_note": guard_note,
         "agent_answers": [
             {"index": state["question_index"], "question": state["question"], "answer": answer}
         ],

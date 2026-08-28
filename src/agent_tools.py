@@ -99,6 +99,14 @@ class ToolFactory:
         """
         Search for top-K most relevant child chunks in ChromaDB.
 
+        Hybrid retrieval (DocsGPT/seerai mechanism): dense bge-m3 results are
+        fused with BM25 (FTS5 index via hybrid_search.HybridIndex) using RRF
+        (k=60). Gene symbols and receptor names (Ephb1, ephrin-B1) are exact
+        lexical signals that dense embeddings often miss; BM25 catches them.
+        When the FTS index is empty or errors, falls back to dense-only
+        silently — the agent never breaks because BM25 is missing.
+        Env kill-switch: HYBRID_SEARCH=0 disables the BM25 channel.
+
         Args:
             query: Search query string
             limit: Maximum number of results (default 5)
@@ -132,23 +140,49 @@ class ToolFactory:
 
             # Format results
             output_lines = []
-            for i in range(len(results["ids"][0])):
-                doc = results["documents"][0][i]
-                meta = results["metadatas"][0][i]
-                dist = results["distances"][0][i]
-                sim = 1.0 / (1.0 + dist)
+            if os.environ.get("HYBRID_SEARCH", "1") != "0":
+                vector_entries = []
+                for i in range(len(results["ids"][0])):
+                    meta = results["metadatas"][0][i]
+                    vector_entries.append({
+                        "parent_id": meta.get("parent_id", "unknown"),
+                        "source": meta.get("source", "unknown"),
+                        "section": meta.get("section", "unknown"),
+                        "text": results["documents"][0][i],
+                        "similarity": 1.0 / (1.0 + results["distances"][0][i]),
+                    })
+                try:
+                    from .hybrid_search import HybridIndex
+                    fused = HybridIndex().search(query, vector_entries, top_k=limit)
+                except Exception:
+                    fused = vector_entries  # BM25 unavailable → dense-only
+                for i, r in enumerate(fused):
+                    sim = r.get("similarity", 0.0)
+                    output_lines.append(
+                        f"--- RESULT {i+1} (similarity: {sim:.3f}, channels: {r.get('channels', 'vec')}) ---\n"
+                        f"Source: {r['source']}\n"
+                        f"Section: {r['section']}\n"
+                        f"Parent ID: {r['parent_id']}\n"
+                        f"Content: {_clip(r['text'], SEARCH_RESULT_MAX_CHARS)}"
+                    )
+            else:
+                for i in range(len(results["ids"][0])):
+                    doc = results["documents"][0][i]
+                    meta = results["metadatas"][0][i]
+                    dist = results["distances"][0][i]
+                    sim = 1.0 / (1.0 + dist)
 
-                parent_id = meta.get("parent_id", "unknown")
-                source = meta.get("source", "unknown")
-                section = meta.get("section", "unknown")
+                    parent_id = meta.get("parent_id", "unknown")
+                    source = meta.get("source", "unknown")
+                    section = meta.get("section", "unknown")
 
-                output_lines.append(
-                    f"--- RESULT {i+1} (similarity: {sim:.3f}) ---\n"
-                    f"Source: {source}\n"
-                    f"Section: {section}\n"
-                    f"Parent ID: {parent_id}\n"
-                    f"Content: {_clip(doc, SEARCH_RESULT_MAX_CHARS)}"
-                )
+                    output_lines.append(
+                        f"--- RESULT {i+1} (similarity: {sim:.3f}) ---\n"
+                        f"Source: {source}\n"
+                        f"Section: {section}\n"
+                        f"Parent ID: {parent_id}\n"
+                        f"Content: {_clip(doc, SEARCH_RESULT_MAX_CHARS)}"
+                    )
 
             return "\n\n".join(output_lines)
 
@@ -212,9 +246,45 @@ class ToolFactory:
                 )
             
             return "\n\n".join(output_lines)
-            
+
         except Exception as e:
             return f"PARENT_RETRIEVAL_ERROR: {str(e)}"
+
+    def snowball_search(self, source: str, direction: str = "forward") -> str:
+        """Citation snowballing over the reference graph (Corvus mechanism).
+
+        forward: papers in the KB citing `source`; backward: `source`'s
+        references that are in the KB. Gracefully reports when the graph
+        hasn't been built yet (scripts/build_reference_graph.py).
+        """
+        try:
+            from .reference_graph import load_graph, snowball
+            graph = load_graph()
+            if graph is None:
+                return ("NO_REFERENCE_GRAPH: reference graph not built yet. "
+                        "Run scripts/build_reference_graph.py once to enable snowballing.")
+            result = snowball(graph, source, direction=direction)
+            if result.get("error"):
+                return f"SNOWBALL_ERROR: {result['error']}"
+            matches = result.get("matches", [])
+            if not matches:
+                return (f"NO_MATCHES: no in-library {'citing papers' if direction == 'forward' else 'resolved references'} "
+                        f"for '{source}' (direction={direction})")
+            lines = [f"--- SNOWBALL {direction.upper()} from '{result['query']}' ---"]
+            for i, m in enumerate(matches, 1):
+                if direction == "forward":
+                    lines.append(
+                        f"{i}. {m.get('title', 'unknown')} ({m.get('year', 'n.d.')})\n"
+                        f"   Source: {m['source']}\n"
+                        f"   Cited via: {m.get('via', '')}"
+                    )
+                else:
+                    resolved = (f" → IN LIBRARY: {m['resolved_title']}"
+                                if m.get("in_library") else " → not in library")
+                    lines.append(f"{i}. {m.get('raw_ref', '')[:180]}{resolved}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"SNOWBALL_ERROR: {str(e)}"
 
 
 from langchain_core.tools import tool
@@ -240,8 +310,19 @@ def create_tools(collection=None):
     def retrieve_many_parents(parent_ids: list) -> str:
         """Retrieve multiple parent chunks at once by their IDs."""
         return factory.retrieve_many_parents(parent_ids)
-    
-    return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents]
+
+    @tool
+    def find_papers_citing(source: str) -> str:
+        """Citation snowballing (forward): find papers IN the knowledge base that cite the given paper. Pass a source filename or paper title (fuzzy). Returns matched library papers with the citation evidence. Use to follow research influence forward in time."""
+        return factory.snowball_search(source, direction="forward")
+
+    @tool
+    def get_paper_references(source: str) -> str:
+        """Citation snowballing (backward): list the references of the given paper that are themselves in the knowledge base. Pass a source filename or paper title (fuzzy). Returns raw reference strings plus resolution to library papers when possible."""
+        return factory.snowball_search(source, direction="backward")
+
+    return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents,
+            find_papers_citing, get_paper_references]
 
 
 def create_tools_legacy(collection=None) -> List:

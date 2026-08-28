@@ -82,6 +82,9 @@ class AgentState(MessagesState):
     context_summary: str = ""
     retrieval_keys: Annotated[Set[str], set_union] = set()
     final_answer: str = ""
+    # Deterministic citation-guard note from collect_answer (empty when the
+    # guard passed cleanly or is disabled via CITATION_GUARD=0).
+    guard_note: str = ""
     agent_answers: List[dict] = []
     tool_call_count: Annotated[int, operator.add] = 0
     iteration_count: Annotated[int, operator.add] = 0

@@ -13,6 +13,7 @@ Chunking config lives here so every caller uses the same sizes.
 import os
 import re
 import json
+from typing import List
 
 
 def atomic_json_dump(obj, path):
@@ -34,6 +35,17 @@ CHILD_CHUNK_SIZE = 500
 CHILD_CHUNK_OVERLAP = 100
 MIN_PARENT_SIZE = 200
 MAX_PARENT_SIZE = 4000
+
+# Figure/table caption atomic parents (LumiCite mechanism, see
+# /Disk_bot/notes/citation_rag/06_LumiCite.md): captions carry key claims in
+# biology papers but were previously merged into the surrounding section and
+# hard to retrieve precisely. Caption paragraphs become their OWN parents
+# with section='figure_caption' / 'table_caption' and a chunk_type tag so
+# they can be filtered: where={"chunk_type": "figure_caption"}.
+CAPTION_RE = re.compile(
+    r"^(?:\*{0,2})(?:(?:Figure|Fig\.?|Table|Supplementary\s+(?:Figure|Table|S)\w*|Scheme)\s*(\d+[\w\.\-]*)"
+    r"|((?:S|SF|ST)\d+))\s*[:.]\s*(.+)", re.I)
+CAPTION_MAX_CHARS = 1500
 
 # ============== Text Processing ==============
 
@@ -98,6 +110,35 @@ def extract_sections(text):
     if current and content:
         sections[current] = '\n'.join(content).strip()
     return sections
+
+def extract_captions(text: str) -> List[dict]:
+    """Find figure/table caption paragraphs and return them as atomic
+    pseudo-sections: [{'section': 'figure_caption'|'table_caption',
+                       'label': 'Figure 3', 'text': caption_text}].
+
+    A caption paragraph STARTS with the CAPTION_RE pattern; continuation
+    paragraphs (indented/continuation lines until the next blank line or
+    caption) are absorbed up to CAPTION_MAX_CHARS.
+    """
+    captions: List[dict] = []
+    paragraphs = split_into_paragraphs(text)
+    for para in paragraphs:
+        first_line = para.split("\n", 1)[0].strip()
+        m = CAPTION_RE.match(first_line)
+        if not m:
+            continue
+        label = (m.group(1) or m.group(2) or "").strip()
+        is_table = first_line.lower().startswith(("table", "supplementary table"))
+        body = para
+        if len(body) > CAPTION_MAX_CHARS:
+            body = body[:CAPTION_MAX_CHARS]
+        captions.append({
+            "section": "table_caption" if is_table else "figure_caption",
+            "label": label,
+            "text": body,
+        })
+    return captions
+
 
 def split_into_paragraphs(text):
     """Split text into paragraphs, preserving sentence boundaries."""
@@ -166,6 +207,11 @@ def create_parent_chunks(text, source, meta):
     """
     Create parent chunks from text sections.
     Returns list of parent chunks with metadata.
+
+    Figure/table captions (extract_captions) become atomic parents with
+    section='figure_caption'/'table_caption' and chunk_type tag — overridable
+    by the real section they live in is NOT attempted: captions are separate
+    retrieval targets (LumiCite mechanism).
     """
     sections = extract_sections(text)
 
@@ -191,6 +237,7 @@ def create_parent_chunks(text, source, meta):
             'parent_id': parent_id,
             'source': source,
             'section': sec_name,
+            'chunk_type': 'section',
             'content': sec_text,
             'word_count': len(sec_text.split()),
             'char_count': text_len,
@@ -205,6 +252,32 @@ def create_parent_chunks(text, source, meta):
             }
         }
         parents.append(parent)
+
+    # Caption atomic parents — bypass MIN_PARENT_SIZE (captions are short but
+    # high-value retrieval targets; LumiCite mechanism).
+    for cap in extract_captions(text):
+        sec_name = cap['section']
+        content_hash = hashlib.md5(f"{source}:{sec_name}:{cap['label']}:{cap['text'][:200]}".encode()).hexdigest()[:16]
+        parent_id = f"{source}#{sec_name}#{content_hash}"
+        parents.append({
+            'parent_id': parent_id,
+            'source': source,
+            'section': sec_name,
+            'chunk_type': sec_name,  # 'figure_caption' | 'table_caption'
+            'label': cap['label'],
+            'content': cap['text'],
+            'word_count': len(cap['text'].split()),
+            'char_count': len(cap['text']),
+            'meta': {
+                'title': meta.get('title', ''),
+                'authors': meta.get('authors', ''),
+                'year': meta.get('year', ''),
+                'journal': meta.get('journal', ''),
+                'doi': meta.get('doi', ''),
+                'pmid': meta.get('pmid', ''),
+                'pmcid': meta.get('pmcid', '')
+            }
+        })
 
     return parents
 

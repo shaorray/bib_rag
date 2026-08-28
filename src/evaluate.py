@@ -30,7 +30,8 @@ _CFG = get_config()
 
 
 def agentic_answer(query, graph):
-    """Full agentic pipeline."""
+    """Full agentic pipeline. Also returns the retrieval_keys ledger so
+    citation_faithfulness can score the answer's sources."""
     start = time.time()
     result = graph.invoke(
         {"messages": [HumanMessage(content=query)]},
@@ -38,7 +39,17 @@ def agentic_answer(query, graph):
     )
     elapsed = time.time() - start
     answer = result["messages"][-1].content
-    return answer, elapsed
+    # retrieval_keys live in the agent-subgraph state channel; recover them
+    # from the final checkpoint state if exposed, else empty.
+    retrieval_keys = set()
+    try:
+        state_values = result.get("agent_answers") or []
+        # retrieval_keys are merged into checkpoint state; read via graph.get_state
+        snap = graph.get_state({"configurable": {"thread_id": f"eval-{hash(query) % 10000}"}})
+        retrieval_keys = set(snap.values.get("retrieval_keys") or set())
+    except Exception:
+        pass
+    return answer, elapsed, retrieval_keys
 
 
 def baseline_answer(query, llm):
@@ -93,6 +104,67 @@ def count_sources(answer):
     return len(set(sources))
 
 
+# ---------------------------------------------------------------------------
+# Citation-faithfulness metrics (borrowed: production-rag-assistant citation
+# enforcement + rag-eval-harness citation-faithfulness; zero LLM).
+# Reuses citation_guard — the SAME code path that guards live answers, so
+# eval scores reflect what production actually enforces.
+# ---------------------------------------------------------------------------
+
+def citation_faithfulness(answer: str, retrieval_keys: set) -> dict:
+    """Score an answer's Sources section against the retrieved parent set.
+
+    Returns {
+      'n_source_lines':   sources listed in the answer,
+      'n_whitelisted':    sources resolvable to a retrieved parent,
+      'whitelist_rate':   fraction of source lines grounded in retrieval,
+      'n_dropped':        lines the guard would remove (hallucination risk),
+      'n_annotated':      lines with low lexical support,
+      'lexical_scores':   per-kept-line best lexical support score,
+    }
+    """
+    from src.citation_guard import (
+        parent_ids_from_keys, load_parent_meta_map,
+        split_answer_sources, resolve_source_lines, load_parent_text,
+        claim_supported_lexically,
+    )
+    known = parent_ids_from_keys(retrieval_keys)
+    parent_meta = load_parent_meta_map(known)
+    body, source_lines, header = split_answer_sources(answer)
+    if not header or not source_lines:
+        return {"n_source_lines": 0, "n_whitelisted": 0, "whitelist_rate": None,
+                "n_dropped": 0, "n_annotated": 0, "lexical_scores": []}
+
+    resolved = resolve_source_lines(source_lines, known, parent_meta)
+    n_ok = sum(1 for _l, pid in resolved if pid is not None)
+    lexical_scores = []
+    n_annotated = 0
+    body_sentences = [s for s in __import__("re").split(r"(?<=[.!?])\s+", body) if len(s) > 40]
+    for line, pid in resolved:
+        if pid is None:
+            continue
+        ptext = load_parent_text(pid)
+        if not ptext or not body_sentences:
+            continue
+        best = 0.0
+        for sent in body_sentences[:12]:
+            ok, score = claim_supported_lexically(sent, ptext)
+            best = max(best, score)
+            if ok:
+                break
+        lexical_scores.append(round(best, 3))
+        if best < 0.05:
+            n_annotated += 1
+    return {
+        "n_source_lines": len(source_lines),
+        "n_whitelisted": n_ok,
+        "whitelist_rate": round(n_ok / len(source_lines), 3) if source_lines else None,
+        "n_dropped": len(source_lines) - n_ok,
+        "n_annotated": n_annotated,
+        "lexical_scores": lexical_scores,
+    }
+
+
 def main():
     queries = [
         "What is the role of Eph receptors in neural development?",
@@ -116,16 +188,22 @@ def main():
     
     for query in queries:
         print(f"\n📝 Query: {query}")
-        
+
         # Agentic
-        ans_a, time_a = agentic_answer(query, graph)
+        ans_a, time_a, keys_a = agentic_answer(query, graph)
         sources_a = count_sources(ans_a)
-        
-        # Baseline
+        faith = citation_faithfulness(ans_a, keys_a)
+        faith_str = ""
+        if faith["n_source_lines"]:
+            faith_str = (f" | faithfulness: {faith['whitelist_rate']} "
+                         f"({faith['n_whitelisted']}/{faith['n_source_lines']} grounded,"
+                         f" {faith['n_dropped']} dropped, {faith['n_annotated']} low-support)")
+
+        # Baseline (baseline_answer returns (answer, elapsed))
         ans_b, time_b = baseline_answer(query, llm)
         sources_b = count_sources(ans_b)
-        
-        print(f"  Agentic:  {time_a:.1f}s | {len(ans_a)} chars | {sources_a} sources")
+
+        print(f"  Agentic:  {time_a:.1f}s | {len(ans_a)} chars | {sources_a} sources{faith_str}")
         print(f"  Baseline: {time_b:.1f}s | {len(ans_b)} chars | {sources_b} sources")
         print(f"  Speedup:  {time_a/time_b:.1f}x")
         quality_len = f"{len(ans_a)/len(ans_b):.1f}x" if len(ans_b) > 0 else "N/A"

@@ -124,6 +124,8 @@ def get_config() -> dict:
         "metadata_log": os.path.join(root, "data", "incremental_metadata.json"),
         "checkpoint_file": os.path.join(root, "data", "build_hierarchical_checkpoint.json"),
         "context_md": os.path.join(root, "CONTEXT.md"),   # per-library domain glossary
+        "fts_index_path": os.path.join(root, "data", "fts_index.db"),  # BM25 (hybrid_search)
+        "reference_graph_path": os.path.join(root, "data", "reference_graph.json"),  # snowballing
         "embed_url": "http://localhost:8081/v1/embeddings",
         "embed_url_raw": "http://localhost:8081/embedding",
         "collection_name": get_collection_name(),

@@ -24,6 +24,7 @@ import zotero_access  # noqa: E402
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kb_config import get_config
+from zotero_match import pick_best_hit, verify_zotero_hit  # noqa: E402
 _CFG = get_config()
 BIB_RAG_EMBED_URL = _CFG["embed_url"]
 CHROMA_PATH = _CFG["chroma_path"]
@@ -84,14 +85,32 @@ def search_bib_rag(query: str, top_k: int = 5) -> List[Dict]:
 
 
 def search_zotero(title: str, doi: str = "") -> Dict:
-    """Find paper in Zotero (via zotero_access: MCP server, HTTP fallback)."""
+    """Find paper in Zotero (via zotero_access: MCP server, HTTP fallback).
+
+    Verified pickup (paper-qa mechanism): candidates are title-similarity /
+    DOI checked via zotero_match.pick_best_hit BEFORE acceptance — the old
+    blind `items[0]` trust produced wrong-paper citations on fuzzy hits.
+    Returns None when no candidate verifies (caller falls back to parsing
+    the passage title itself).
+    """
     clean_title = re.sub(r'^[A-Z][a-z]+ et al\. - \d{4} - ', '', title)
 
-    items = zotero_access.zotero_search(clean_title, limit=3)
+    items = zotero_access.zotero_search(clean_title, limit=5)
     if not items:
         return None
 
-    full = zotero_access.zotero_item(items[0]["key"]) or items[0]
+    best = zotero_match.pick_best_hit(items, clean_title, doi)
+    if best is None:
+        return None
+
+    full = zotero_access.zotero_item(best["key"]) or best
+    # Re-verify against the FULL record (search snippets can carry truncated
+    # titles); a conflict here means the snippet matched but the item is not
+    # the same paper.
+    ok, _s, _r = zotero_match.verify_zotero_hit(
+        clean_title, doi, {"title": full.get("title", ""), "doi": full.get("doi", "")})
+    if not ok:
+        return None
     return {
         "authors": zotero_access.display_authors(full.get("authors", "")),
         "year": full.get("year", ""),
