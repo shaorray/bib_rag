@@ -21,9 +21,12 @@ many libraries:
 ```bash
 cd <this repo>
 
-# 0. Prerequisites — an OpenAI-compatible embedding server is REQUIRED
-#    for indexing and querying (bge-m3 recommended; see "Server Setup" below).
-#    This toolkit expects it on port 8081.
+# 0. Prerequisites
+#    a) Python dependencies (Python 3.10; see requirements.txt for details):
+pip install -r requirements.txt
+#    b) an OpenAI-compatible embedding server (bge-m3 recommended) — REQUIRED
+#       for indexing and querying; this toolkit expects it on port 8081
+#       (see "Server Setup" below).
 curl http://localhost:8081/health          # → {"status":"ok"}
 
 # 1. Create a library (one command: folders + manifest + registry + wrapper)

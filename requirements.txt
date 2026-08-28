@@ -1,0 +1,34 @@
+# bib_rag toolkit dependencies
+# Tested with Python 3.10 and the versions below (installed in the dev env).
+# Install:  pip install -r requirements.txt
+#
+# NOTE (import pitfall): on some systems a system-level protobuf shadows the
+# pip one and breaks chromadb's opentelemetry chain. If chromadb raises
+# "cannot import name 'builder' from 'google.protobuf.internal'", set
+#   export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+# (the eph-rag / geo-rag wrappers do this automatically).
+
+# ── Core (required for indexing + querying) ─────────────────────────────
+chromadb==1.4.1          # vector store; 1.4.1 is the tested pin
+numpy>=1.24,<2           # chromadb-compatible range
+requests>=2.31           # service health checks, API calls
+
+# ── Agentic pipeline (required for agentic_query.py) ────────────────────
+langgraph>=0.2,<2
+langchain>=0.3,<2
+langchain-core>=0.3,<2
+langchain-community>=0.3,<2
+langchain-openai>=0.2,<2
+openai>=1.40             # OpenAI-compatible client (classify_papers, agent nodes)
+pydantic>=2,<3
+
+# ── Document processing ─────────────────────────────────────────────────
+pymupdf>=1.24            # PDF text extraction (add_papers, convert_pdfs)
+pymupdf4llm>=0.0.17      # PDF → structured markdown
+odfpy>=1.4               # .odt writer outputs (bib_rag_writer/grill/debate)
+
+# ── Optional (CPU-only fallback build path) ─────────────────────────────
+# Only needed for src/build_hierarchical.py (SentenceTransformers CPU embed).
+# The GPU build (build_hierarchical_gpu.py) uses the llama-server embedding
+# service on port 8081 instead and does NOT need this.
+sentence-transformers>=2.2
