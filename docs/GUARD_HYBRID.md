@@ -79,5 +79,60 @@ newly built ones); re-index a paper with `scripts/index_single_paper.py`.
 
 ## Tests
 
-`python3 src/test_guard_modules.py` → 14/14 (offline: no LLM/network/ChromaDB
-writes; FTS roundtrip uses a tmp library via BIB_RAG_ROOT).
+`python3 src/test_guard_modules.py` → 21/21 (offline: no LLM/network/ChromaDB
+writes; FTS roundtrip uses a tmp library via BIB_RAG_ROOT). Both runners work:
+`pytest src/test_guard_modules.py` and `python3 src/test_guard_modules.py`.
+
+---
+
+# Round 2 — CJK bigrams, identifier normalization, broadened retry (2026-08-28)
+
+Three first-tier mechanisms from the Zotero-repo v2 survey
+(`/Disk_bot/notes/zotero_RAG/`), all zero-LLM:
+
+## B2 — CJK character-bigram FTS channel (`src/hybrid_search.py` v2)
+
+FTS5's unicode61 tokenizer indexes a whole CJK run as ONE token, so Chinese
+text was unsearchable by sub-phrase. Schema v2 adds a `cjk_text` column
+holding a bigram-segmented copy of each chunk's CJK runs
+(`轴突导向` → `轴突 突导 导向`); queries are split the same way and both
+channels run. v1 indexes migrate in place on first write (rename → rebuild →
+copy); latin queries are unaffected. Note: the current eph_rag corpus is
+pure English — the CJK channel is defense for future Chinese-language
+ingest (notes, Chinese review articles).
+
+## B5 — Identifier normalization (`src/identifiers.py`, new)
+
+Canonical forms for DOI / arXiv / PMID: strips `https://doi.org/`, `doi:`,
+case, and version suffixes (`...002v2` → `...002`); arXiv old+new style;
+PMID digits. Wired into:
+- `zotero_match.doi_match` — two-tier: exact canonical equality, then
+  truncated-metadata prefix (short side being a strict prefix of the long
+  side, ≥8 chars). **Fixed a real bug**: the old char-prefix comparison
+  counted same-JOURNAL DOIs (`10.1016/j.ydbio.2021.01.002` vs
+  `...2019.05.007`) as the same paper — the shared `10.1016/j.ydbio.` prefix
+  is 18 chars, far above any fixed threshold.
+- `reference_graph._resolve_source` — snowball tools now accept a bare or
+  URL-wrapped DOI and resolve it to the library paper via canonical match
+  against parent_store metadata.
+
+## B1 — Deterministic broadened retry (`src/broaden.py`, new)
+
+Weak-result detection + one automatic re-search, borrowed from
+zotero-redisearch-rag's `should_broaden_retrieval`. Four zero-LLM signals on
+the first-pass results: too few chunks (<2), too few chars (<300), weak best
+similarity (<0.40), narrative-starved (<30% prose sentences). Trigger → one
+re-search with the where-filter dropped and limit ×3; the better pass wins;
+output is prefixed with `[BROADENED]` + the triggering signals so the agent
+knows the first pass was thin. Escalation ladder and `broaden_signature`
+dedup prevent loops. Env switches:
+
+- `BROADEN_RETRY=0` — disable
+- `BROADEN_MIN_RESULTS` (2), `BROADEN_MIN_CHARS` (300),
+  `BROADEN_MIN_SIM` (0.40), `BROADEN_MIN_NARRATIVE` (0.30)
+
+Also fixed while wiring: relative imports (`from .broaden import …`) raised
+ImportError when `src/` is on sys.path directly (CLI/test entry), silently
+killing the whole broaden branch — all intra-`src` imports now fall back to
+top-level imports (`agent_tools.py` ×3, matches the existing
+`hybrid_search` pattern).

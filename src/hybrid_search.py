@@ -53,6 +53,37 @@ RRF_K = 60
 # FTS5 query sanitization: strip operators/quotes that would error
 _FTS_BAD = re.compile(r'["\^{}()\[\]*:]')
 
+# CJK ranges: unified ideographs + kana + compatibility ideographs.
+# Chinese/Japanese text has no spaces, so FTS5's unicode61 tokenizer indexes a
+# whole CJK run as ONE token — "轴突导向" never matches "轴突导向因子".
+# Fix (borrowed from RAG-Assistant-for-Zotero's CJK char-level BM25, see
+# /Disk_bot/notes/zotero_RAG/03): index a bigram-segmented copy of the text in
+# a separate `cjk_text` column; queries are likewise cut into bigrams.
+_CJK_RE = re.compile(r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+')
+
+# Schema version: v2 adds the cjk_text column. A v1 index keeps working for
+# latin queries; the first WRITE (upsert/rebuild) migrates it in place.
+_SCHEMA_VERSION = 2
+
+
+def _cjk_prepare(text: str) -> str:
+    """CJK runs → space-separated character bigrams (unigram for len-1 runs).
+    Latin/other text is dropped (the main `text` column covers it)."""
+    out = []
+    for run in _CJK_RE.findall(text or ""):
+        if len(run) == 1:
+            out.append(run)
+        else:
+            out.extend(run[i:i + 2] for i in range(len(run) - 1))
+    return " ".join(out)
+
+
+def _split_latin_cjk(query: str) -> Tuple[str, List[str]]:
+    """Split a query into (escaped-latin-terms, cjk-runs)."""
+    runs = _CJK_RE.findall(query or "")
+    latin = _CJK_RE.sub(" ", query or "")
+    return _fts_escape(latin), runs
+
 
 def _fts_escape(query: str) -> str:
     """Make a user/LLM query safe for MATCH. Terms are AND-ed implicitly by
@@ -98,9 +129,48 @@ class HybridIndex:
         if self._conn is None:
             conn = sqlite3.connect(self.fts_path)
             conn.execute("PRAGMA journal_mode=WAL")
+            self._ensure_schema(conn)
+            conn.commit()
+            self._conn = conn
+        return self._conn
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Create (or migrate v1→v2) the FTS schema.
+
+        FTS5 tables can't ALTER: migration = rename old table → rebuild with
+        the new schema → copy rows (recomputing cjk_text on the fly)."""
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS child_fts USING fts5(
+                text,
+                cjk_text,
+                parent_id UNINDEXED,
+                source UNINDEXED,
+                section UNINDEXED,
+                chunk_idx UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fts_meta (
+                source TEXT PRIMARY KEY,
+                n_children INTEGER,
+                built_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        # Detect v1 (no cjk_text column) and migrate in place.
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(child_fts)")]
+        except sqlite3.Error:
+            cols = []
+        if cols and "cjk_text" not in cols:
+            conn.executescript("""
+                DROP TABLE IF EXISTS child_fts_v1_migrate;
+                ALTER TABLE child_fts RENAME TO child_fts_v1_migrate;
+            """)
             conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS child_fts USING fts5(
+                CREATE VIRTUAL TABLE child_fts USING fts5(
                     text,
+                    cjk_text,
                     parent_id UNINDEXED,
                     source UNINDEXED,
                     section UNINDEXED,
@@ -108,16 +178,16 @@ class HybridIndex:
                     tokenize = 'unicode61 remove_diacritics 2'
                 )
             """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS fts_meta (
-                    source TEXT PRIMARY KEY,
-                    n_children INTEGER,
-                    built_at TEXT DEFAULT (datetime('now'))
-                )
-            """)
+            rows = conn.execute(
+                "SELECT text, parent_id, source, section, chunk_idx "
+                "FROM child_fts_v1_migrate").fetchall()
+            conn.executemany(
+                "INSERT INTO child_fts(text, cjk_text, parent_id, source, section, chunk_idx) "
+                "VALUES (?,?,?,?,?,?)",
+                [(t, _cjk_prepare(t), p, s, sec, idx)
+                 for (t, p, s, sec, idx) in rows])
+            conn.execute("DROP TABLE child_fts_v1_migrate")
             conn.commit()
-            self._conn = conn
-        return self._conn
 
     def close(self):
         if self._conn is not None:
@@ -150,12 +220,13 @@ class HybridIndex:
         c.execute("DELETE FROM child_fts WHERE source = ?", (source,))
         c.execute("DELETE FROM fts_meta WHERE source = ?", (source,))
         rows = [
-            (ch["text"], ch["parent_id"], ch["source"], ch["section"], ch.get("idx", i))
+            (ch["text"], _cjk_prepare(ch["text"]), ch["parent_id"], ch["source"],
+             ch["section"], ch.get("idx", i))
             for i, ch in enumerate(children)
         ]
         c.executemany(
-            "INSERT INTO child_fts(text, parent_id, source, section, chunk_idx) "
-            "VALUES (?,?,?,?,?)", rows)
+            "INSERT INTO child_fts(text, cjk_text, parent_id, source, section, chunk_idx) "
+            "VALUES (?,?,?,?,?,?)", rows)
         c.execute("INSERT INTO fts_meta(source, n_children) VALUES (?,?)",
                   (source, len(rows)))
         c.commit()
@@ -195,15 +266,30 @@ class HybridIndex:
     def bm25_search(self, query: str, limit: int = 10,
                     where_source: Optional[str] = None) -> List[dict]:
         """BM25 ranking over the FTS5 index. Falls back to OR-terms when the
-        implicit AND returns nothing (common with long LLM queries)."""
+        implicit AND returns nothing (common with long LLM queries).
+
+        CJK handling: the query is split into latin terms (matched against
+        `text`) and CJK runs (matched as character bigrams against
+        `cjk_text`); both sub-queries run and results are inter-leaved.
+        """
         q = _fts_escape(query)
-        if not q:
+        latin_q, cjk_runs = _split_latin_cjk(query)
+        if not q and not cjk_runs:
             return []
         c = self.conn
-        def _run(match_q: str) -> List[dict]:
+        # Bigram-escape CJK runs: each run becomes a quoted bigram sequence.
+        cjk_match_parts = []
+        for run in cjk_runs:
+            grams = [run[i:i + 2] for i in range(len(run) - 1)] or [run]
+            cjk_match_parts.append(
+                " ".join(f'"{g}"' for g in grams))
+
+        def _run(match_q: str, column: str = "child_fts") -> List[dict]:
+            if not match_q:
+                return []
             sql = ("SELECT parent_id, source, section, text, "
-                   "bm25(child_fts) AS score FROM child_fts "
-                   "WHERE child_fts MATCH ?")
+                   f"bm25({column}) AS score FROM {column} "
+                   f"WHERE {column} MATCH ?")
             params: list = [match_q]
             if where_source:
                 sql += " AND source = ?"
@@ -213,13 +299,26 @@ class HybridIndex:
             rows = c.execute(sql, params).fetchall()
             return [{"parent_id": r[0], "source": r[1], "section": r[2],
                      "text": r[3], "bm25": -r[4]} for r in rows]
+
+        results: List[dict] = []
         try:
-            res = _run(q)
+            if latin_q:
+                res = _run(latin_q)
+                if not res and " " in latin_q:
+                    res = _run(" OR ".join(latin_q.split()))
+                results.extend(res)
+            for run_q in cjk_match_parts:
+                res = _run(run_q)
+                if not res and " " in run_q:
+                    res = _run(" OR ".join(
+                        p.strip('"') for p in run_q.split()))
+                results.extend(res)
         except sqlite3.OperationalError:
-            return []
-        if not res and " " in q:
-            res = _run(" OR ".join(q.split()))
-        return res
+            # match-syntax issue on one channel shouldn't kill the other —
+            # but a partial failure here means results may be partially
+            # populated; returning them is still better than nothing.
+            pass
+        return results
 
     # -- RRF fusion ----------------------------------------------------------
 

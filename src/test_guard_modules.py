@@ -277,9 +277,165 @@ def test_citation_faithfulness_scoring():
 
 
 # ---------------------------------------------------------------------------
+# B2: CJK bigram tokenization in FTS
+# ---------------------------------------------------------------------------
+
+def test_cjk_bigram_indexing(tmpdir):
+    """CJK text must be findable by sub-phrase queries (bigram channel)."""
+    os.environ["BIB_RAG_ROOT"] = str(tmpdir)
+    os.environ.pop("BIB_RAG_KB_NAME", None)
+    import importlib
+    import src.kb_config as kc
+    importlib.reload(kc)
+    os.makedirs(os.path.join(str(tmpdir), "parent_store"), exist_ok=True)
+    parents = [{"parent_id": "cjk.md#results#h1", "source": "cjk.md",
+                "section": "results",
+                "content": "轴突导向因子在 Ephb1 突变体中表达失调，导致神经回路异常。",
+                "word_count": 20, "char_count": 60,
+                "meta": {"title": "中文测试"}}]
+    with open(os.path.join(str(tmpdir), "parent_store", "cjk_md.json"), "w") as f:
+        json.dump(parents, f)
+    import src.hybrid_search as hs
+    importlib.reload(hs)
+    idx = hs.HybridIndex()
+    n = idx.upsert_source("cjk_md")
+    assert n > 0
+    # sub-phrase of the indexed sentence — impossible without the CJK channel
+    hits = idx.bm25_search("轴突导向", limit=5)
+    assert hits, "CJK sub-phrase query returned nothing"
+    assert "轴突" in hits[0]["text"] or "轴突导向" in hits[0]["text"]
+    # full mixed query (latin + cjk) must not error and must hit
+    hits2 = idx.bm25_search("Ephb1 突变体", limit=5)
+    assert hits2, "mixed latin+CJK query returned nothing"
+    # absent phrase → empty
+    hits3 = idx.bm25_search("转录组测序", limit=5)
+    assert hits3 == []
+    print(f"  ✓ CJK bigram: {n} children, 轴突导向→{len(hits)} hits, "
+          f"mixed→{len(hits2)}, absent→0")
+
+
+def test_cjk_prepare_unit():
+    from src.hybrid_search import _cjk_prepare
+    assert _cjk_prepare("轴突导向") == "轴突 突导 导向"
+    assert _cjk_prepare("中") == "中"
+    assert _cjk_prepare("Ephb1 only") == ""
+    print("  ✓ _cjk_prepare bigram segmentation")
+
+
+# ---------------------------------------------------------------------------
+# B5: identifier normalization
+# ---------------------------------------------------------------------------
+
+def test_identifier_normalization():
+    from src.identifiers import (normalize_doi, normalize_arxiv,
+                                 normalize_pmid, doi_prefix_agree,
+                                 detect_identifier)
+    # URL-wrapped, case-insensitive, version-suffixed → same canonical DOI
+    assert (normalize_doi("https://doi.org/10.1016/J.YDBIO.2021.01.002")
+            == "10.1016/j.ydbio.2021.01.002")
+    assert (normalize_doi("doi:10.1016/j.ydbio.2021.01.002v2")
+            == "10.1016/j.ydbio.2021.01.002")
+    assert normalize_doi("not a doi") is None
+    assert normalize_arxiv("arXiv:2103.12345v2") == "2103.12345"
+    assert normalize_pmid("PMID: 34526773") == "34526773"
+    assert detect_identifier("10.1038/s41586-020-2649-2") == (
+        "doi", "10.1038/s41586-020-2649-2")
+    print("  ✓ identifier normalization: doi/arxiv/pmid canonical forms")
+
+
+def test_doi_match_journal_mates():
+    """Same-journal DOIs must NOT count as the same paper (regression for
+    the prefix-length bug), while truncated metadata still matches."""
+    from src.zotero_match import doi_match
+    assert doi_match("https://doi.org/10.1016/J.YDBIO.2021.01.002",
+                     "doi:10.1016/j.ydbio.2021.01.002") is True
+    # journal-mates: identical registrant+journal path, different item id
+    assert doi_match("10.1016/j.ydbio.2021.01.002",
+                     "10.1016/j.ydbio.2019.05.007") is False
+    assert doi_match("10.1038/s41586-020-2649-2",
+                     "10.1038/s41591-021-01299-x") is False
+    # truncated metadata (short prefix of the full DOI) → agree
+    assert doi_match("10.1016/j.ydbio.2021.01",
+                     "10.1016/j.ydbio.2021.01.002") is True
+    assert doi_match("", "10.1016/x") is None
+    print("  ✓ doi_match: canonical + journal-mate separation + truncation")
+
+
+def test_reference_graph_doi_resolution(tmpdir):
+    """_resolve_source must find papers by bare/URL-wrapped DOI."""
+    import src.reference_graph as rg
+    graph = {"papers": {
+        "wilkinson_2021.md": {"title": "Eph signalling in development",
+                              "year": "2021",
+                              "doi": "https://doi.org/10.1242/dev.199555"},
+    }, "edges": []}
+    assert rg._resolve_source(graph, "10.1242/dev.199555") == "wilkinson_2021.md"
+    assert (rg._resolve_source(
+        graph, "doi:10.1242/dev.199555v1") == "wilkinson_2021.md")
+    assert rg._resolve_source(graph, "10.9999/not-there") is None
+    print("  ✓ reference_graph: DOI-based paper resolution")
+
+
+# ---------------------------------------------------------------------------
+# B1: broadened retry signals
+# ---------------------------------------------------------------------------
+
+def test_broaden_signals():
+    from src.broaden import (retrieval_metrics, should_broaden,
+                             plan_broadening, or_split_query)
+    # weak: single table-debris chunk with low similarity
+    weak = [{"text": "Fig 3a | 45.2 | 12.1 |", "similarity": 0.31}]
+    weak_ok, weak_reasons = should_broaden(retrieval_metrics(weak))
+    assert weak_ok and len(weak_reasons) >= 2
+    # strong: prose chunks with decent similarity
+    strong = [{"text": "Ephb1 mutant embryos show failed axon guidance at the "
+                       "midline of the developing hindbrain. " * 2,
+               "similarity": 0.52},
+              {"text": "In contrast, ephrin-B1 Fc clustering rescued the "
+                       "repulsive response robustly in explant cultures. " * 2,
+               "similarity": 0.48}]
+    assert not should_broaden(retrieval_metrics(strong))[0]
+    # ladder: attempt 0 → widen only; attempt 1 → +or-split; attempt 2 → stop
+    p0 = plan_broadening("q", True, 0)
+    p1 = plan_broadening("q", True, 1)
+    assert p0 and not p0["or_split"] and p1 and p1["or_split"]
+    assert plan_broadening("q", True, 2) is None
+    # or-split: rarest (longest) terms win; single term → ''
+    split = or_split_query("the role of Ephb1 in axon guidance")
+    assert "Ephb1" in split and "guidance" in split
+    assert or_split_query("Ephb1") == ""
+    print("  ✓ broaden: 4-signal detection + ladder + or-split")
+
+
+def test_broaden_disabled_by_default_env(tmpdir):
+    """BROADEN_RETRY=0 must leave search output untouched (no [BROADENED])."""
+    os.environ["BROADEN_RETRY"] = "0"
+    try:
+        # pure formatting check via _format_results
+        from src.agent_tools import ToolFactory
+        f = ToolFactory.__new__(ToolFactory)  # skip __init__ (no chroma here)
+        out = f._format_results(
+            [{"parent_id": "a#s#1", "source": "a.md", "section": "results",
+              "text": "hello world content", "similarity": 0.5}])
+        assert "BROADENED" not in out and "RESULT 1" in out
+        out2 = f._format_results(
+            [{"parent_id": "a#s#1", "source": "a.md", "section": "r",
+              "text": "x", "similarity": 0.2}],
+            broadened=True, broaden_reasons=["few-results(1<2)"])
+        assert out2.startswith("[BROADENED]") and "few-results" in out2
+    finally:
+        os.environ.pop("BROADEN_RETRY", None)
+    print("  ✓ broaden formatting: [BROADENED] header + kill-switch path")
+
+
+# ---------------------------------------------------------------------------
 # fixture
 # ---------------------------------------------------------------------------
 
+import pytest  # test dep; the __main__ runner below never needs it
+
+
+@pytest.fixture
 def tmp_parent_store():
     import tempfile
     return tempfile.mkdtemp(prefix="bib_rag_test_")

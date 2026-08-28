@@ -95,6 +95,54 @@ class ToolFactory:
             print(f"❌ Embedding failed: {e}")
             return None
     
+    def _format_results(self, fused: List[dict], broadened: bool = False,
+                        broaden_reasons: Optional[List[str]] = None) -> str:
+        """Format search results for the agent (shared by both paths)."""
+        output_lines = []
+        if broadened:
+            output_lines.append(
+                "[BROADENED] first-pass results were weak ("
+                + "; ".join(broaden_reasons or [])
+                + ") — results below include a widened re-search (where-filter "
+                "dropped, limit widened).")
+        for i, r in enumerate(fused):
+            sim = r.get("similarity", 0.0)
+            output_lines.append(
+                f"--- RESULT {i+1} (similarity: {sim:.3f}, channels: {r.get('channels', 'vec')}) ---\n"
+                f"Source: {r['source']}\n"
+                f"Section: {r['section']}\n"
+                f"Parent ID: {r['parent_id']}\n"
+                f"Content: {_clip(r['text'], SEARCH_RESULT_MAX_CHARS)}"
+            )
+        return "\n\n".join(output_lines)
+
+    def _vector_entries(self, results) -> List[dict]:
+        """ChromaDB query result → entry dicts for RRF fusion."""
+        out = []
+        for i in range(len(results["ids"][0])):
+            meta = results["metadatas"][0][i]
+            out.append({
+                "parent_id": meta.get("parent_id", "unknown"),
+                "source": meta.get("source", "unknown"),
+                "section": meta.get("section", "unknown"),
+                "text": results["documents"][0][i],
+                "similarity": 1.0 / (1.0 + results["distances"][0][i]),
+            })
+        return out
+
+    def _vector_search(self, query: str, limit: int,
+                       where: Optional[dict]):
+        """Raw ChromaDB query. Returns None on embedding failure."""
+        embedding = self.embed_query(query)
+        if not embedding:
+            return None
+        return self.collection.query(
+            query_embeddings=[embedding],
+            n_results=limit,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+
     def search_child_chunks(self, query: str, limit: int = 5, where: Optional[dict] = None) -> str:
         """
         Search for top-K most relevant child chunks in ChromaDB.
@@ -106,6 +154,13 @@ class ToolFactory:
         When the FTS index is empty or errors, falls back to dense-only
         silently — the agent never breaks because BM25 is missing.
         Env kill-switch: HYBRID_SEARCH=0 disables the BM25 channel.
+
+        Broadened retry (zotero-redisearch-rag mechanism, see
+        src/broaden.py): when the fused results trip a weakness signal
+        (too few / too short / weak best score / narrative-starved), ONE
+        automatic re-search runs with the where-filter dropped and a wider
+        limit; results are prefixed with [BROADENED] + the triggering
+        signals. Env kill-switch: BROADEN_RETRY=0.
 
         Args:
             query: Search query string
@@ -119,72 +174,84 @@ class ToolFactory:
             Formatted string with child chunks and their parent_ids
         """
         try:
-            # Embed query
-            embedding = self.embed_query(query)
-            if not embedding:
-                return "EMBEDDING_ERROR: Could not generate query embedding"
-
             # Clamp the result count so a single search can't flood the context.
             limit = max(1, min(int(limit or 5), SEARCH_MAX_LIMIT))
 
-            # Search in ChromaDB
-            results = self.collection.query(
-                query_embeddings=[embedding],
-                n_results=limit,
-                where=where,
-                include=["documents", "metadatas", "distances"]
-            )
+            results = self._vector_search(query, limit, where)
+            if results is None:
+                return "EMBEDDING_ERROR: Could not generate query embedding"
 
             if not results or not results["ids"][0]:
                 return "NO_RELEVANT_CHUNKS"
 
-            # Format results
-            output_lines = []
+            vector_entries = self._vector_entries(results)
+
+            # Hybrid fusion (BM25 + RRF) when enabled
             if os.environ.get("HYBRID_SEARCH", "1") != "0":
-                vector_entries = []
-                for i in range(len(results["ids"][0])):
-                    meta = results["metadatas"][0][i]
-                    vector_entries.append({
-                        "parent_id": meta.get("parent_id", "unknown"),
-                        "source": meta.get("source", "unknown"),
-                        "section": meta.get("section", "unknown"),
-                        "text": results["documents"][0][i],
-                        "similarity": 1.0 / (1.0 + results["distances"][0][i]),
-                    })
                 try:
                     from .hybrid_search import HybridIndex
                     fused = HybridIndex().search(query, vector_entries, top_k=limit)
                 except Exception:
                     fused = vector_entries  # BM25 unavailable → dense-only
-                for i, r in enumerate(fused):
-                    sim = r.get("similarity", 0.0)
-                    output_lines.append(
-                        f"--- RESULT {i+1} (similarity: {sim:.3f}, channels: {r.get('channels', 'vec')}) ---\n"
-                        f"Source: {r['source']}\n"
-                        f"Section: {r['section']}\n"
-                        f"Parent ID: {r['parent_id']}\n"
-                        f"Content: {_clip(r['text'], SEARCH_RESULT_MAX_CHARS)}"
-                    )
             else:
-                for i in range(len(results["ids"][0])):
-                    doc = results["documents"][0][i]
-                    meta = results["metadatas"][0][i]
-                    dist = results["distances"][0][i]
-                    sim = 1.0 / (1.0 + dist)
+                fused = vector_entries
 
-                    parent_id = meta.get("parent_id", "unknown")
-                    source = meta.get("source", "unknown")
-                    section = meta.get("section", "unknown")
+            # Broadened retry on weak first-pass (zero-LLM, once).
+            if os.environ.get("BROADEN_RETRY", "1") != "0":
+                try:
+                    try:
+                        from .broaden import (retrieval_metrics, should_broaden,
+                                              plan_broadening, broaden_signature,
+                                              or_split_query)
+                    except ImportError:  # src/ on sys.path directly (CLI/tests)
+                        from broaden import (retrieval_metrics, should_broaden,
+                                             plan_broadening, broaden_signature,
+                                             or_split_query)
+                    metrics = retrieval_metrics(vector_entries)
+                    weak, reasons = should_broaden(metrics)
+                    sig = broaden_signature(query, {"drop_where": True,
+                                                    "or_split": False})
+                    if weak and sig not in getattr(self, "_broaden_seen", set()):
+                        if not hasattr(self, "_broaden_seen"):
+                            self._broaden_seen = set()
+                        self._broaden_seen.add(sig)
+                        plan = plan_broadening(query, had_where=bool(where),
+                                               attempt=0)
+                        if plan:
+                            wide_limit = min(limit * 3, SEARCH_MAX_LIMIT)
+                            alt_query = (or_split_query(query) or query
+                                         if plan.get("or_split") else query)
+                            alt_where = None if plan.get("drop_where") else where
+                            alt = self._vector_search(alt_query, wide_limit,
+                                                      alt_where)
+                            if alt and alt["ids"][0]:
+                                alt_entries = self._vector_entries(alt)
+                                if os.environ.get("HYBRID_SEARCH", "1") != "0":
+                                    try:
+                                        try:
+                                            from .hybrid_search import HybridIndex
+                                        except ImportError:
+                                            from hybrid_search import HybridIndex
+                                        alt_fused = HybridIndex().search(
+                                            alt_query, alt_entries,
+                                            top_k=wide_limit)
+                                    except Exception:
+                                        alt_fused = alt_entries
+                                else:
+                                    alt_fused = alt_entries
+                                alt_metrics = retrieval_metrics(alt_entries)
+                                alt_weak, _ = should_broaden(alt_metrics)
+                                # keep the better of the two passes
+                                if not alt_weak or (len(alt_fused) > len(fused)):
+                                    fused = alt_fused[:limit]
+                                    return self._format_results(
+                                        fused, broadened=True,
+                                        broaden_reasons=reasons)
+                    return self._format_results(fused)
+                except Exception:
+                    return self._format_results(fused)
 
-                    output_lines.append(
-                        f"--- RESULT {i+1} (similarity: {sim:.3f}) ---\n"
-                        f"Source: {source}\n"
-                        f"Section: {section}\n"
-                        f"Parent ID: {parent_id}\n"
-                        f"Content: {_clip(doc, SEARCH_RESULT_MAX_CHARS)}"
-                    )
-
-            return "\n\n".join(output_lines)
+            return self._format_results(fused)
 
         except Exception as e:
             return f"RETRIEVAL_ERROR: {str(e)}"
@@ -258,7 +325,10 @@ class ToolFactory:
         hasn't been built yet (scripts/build_reference_graph.py).
         """
         try:
-            from .reference_graph import load_graph, snowball
+            try:
+                from .reference_graph import load_graph, snowball
+            except ImportError:  # src/ on sys.path directly (CLI/tests)
+                from reference_graph import load_graph, snowball
             graph = load_graph()
             if graph is None:
                 return ("NO_REFERENCE_GRAPH: reference graph not built yet. "

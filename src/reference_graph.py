@@ -178,8 +178,14 @@ def load_graph() -> Optional[Dict]:
 
 
 def _resolve_source(graph: Dict, source_or_title: str) -> Optional[str]:
-    """Accept a source filename, a title, or a fuzzy prefix; return the
-    canonical source key."""
+    """Accept a source filename, a title, a DOI/arXiv/PMID, or a fuzzy
+    prefix; return the canonical source key.
+
+    DOI matching uses identifiers.normalize_doi on BOTH sides, so
+    "https://doi.org/10.1016/..." in the graph metadata matches a bare
+    "10.1016/..." query (seerai identifier-normalization mechanism).
+    """
+    from identifiers import normalize_doi
     if source_or_title in graph["papers"]:
         return source_or_title
     q = source_or_title.lower().strip()
@@ -187,6 +193,13 @@ def _resolve_source(graph: Dict, source_or_title: str) -> Optional[str]:
     for src, meta in graph["papers"].items():
         if meta.get("title", "").lower() == q:
             return src
+    # identifier match (DOI first — canonical, strongest signal)
+    q_doi = normalize_doi(source_or_title)
+    if q_doi:
+        for src, meta in graph["papers"].items():
+            m_doi = normalize_doi(meta.get("doi", ""))
+            if m_doi and m_doi == q_doi:
+                return src
     # containment match (title or filename)
     hits = [src for src, meta in graph["papers"].items()
             if q in src.lower() or (meta.get("title") and q in meta["title"].lower())]

@@ -74,21 +74,20 @@ def title_similarity(query: str, cand: str) -> float:
 
 
 def doi_match(query_doi: str, cand_doi: str) -> Optional[bool]:
-    """True/False when both DOIs are present (prefix comparison, case- and
-    URL-scheme-insensitive); None when either side is missing."""
-    q = (query_doi or "").lower().replace("https://doi.org/", "").strip()
-    c = (cand_doi or "").lower().replace("https://doi.org/", "").strip()
-    if not q or not c:
+    """True/False when both DOIs are present (canonical comparison via
+    identifiers.normalize_doi — strips doi:/https://doi.org/ prefixes and
+    version suffixes first); None when either side is missing.
+
+    Two-tier: exact canonical equality → True; shared registrant prefix
+    (≥8 chars) → True (suffix drift tolerated); clear divergence → False.
+    """
+    from identifiers import normalize_doi, doi_prefix_agree
+    nq, nc = normalize_doi(query_doi), normalize_doi(cand_doi)
+    if not nq or not nc:
         return None
-    k = min(len(q), len(c))
-    n = 0
-    for a, b in zip(q, c):
-        if a != b:
-            break
-        n += 1
-    # share a prefix long enough to be the same DOI (registrant+item), but
-    # allow tiny suffix drift from truncation in source metadata
-    return n >= min(MIN_DOI_PREFIX, k) and n >= 7
+    if nq == nc:
+        return True
+    return doi_prefix_agree(nq, nc, min_prefix=MIN_DOI_PREFIX)
 
 
 def verify_zotero_hit(query_title: str, query_doi: str,
