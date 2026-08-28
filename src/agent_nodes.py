@@ -350,6 +350,22 @@ def should_compress_context(state: AgentState) -> Command[Literal["compress_cont
                         new_ids.add(f"search::{query}")
             break
 
+    # Parent-ID harvesting from ToolMessages (same source the citation guard
+    # uses): search results list the parent_ids whose excerpts were shown,
+    # so a session that answers from search excerpts alone would otherwise
+    # carry ONLY search:: keys in the evidence ledger — and then
+    # evaluate.citation_faithfulness (which sees only the keys, not the tool
+    # messages) would score every Sources line as unresolvable (whitelist
+    # rate 0.0 despite fully grounded retrieval). Mirrors
+    # citation_guard.parent_ids_from_tool_messages.
+    if not any(k.startswith("parent::") for k in new_ids):
+        try:
+            from .citation_guard import parent_ids_from_tool_messages
+            harvested = parent_ids_from_tool_messages(messages)
+            new_ids.update(f"parent::{p}" for p in harvested)
+        except Exception:
+            pass  # ledger hygiene must never break the routing loop
+
     updated_ids = state.get("retrieval_keys", set()) | new_ids
 
     # Short loops don't benefit from mid-loop compression: compressing costs

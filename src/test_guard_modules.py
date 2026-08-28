@@ -1080,6 +1080,39 @@ def test_agent_tools_local_budget_default():
     print("  ✓ agent_tools: local LLM → tighter parent budget default (4000)")
 
 
+def test_retrieval_keys_harvest_parent_ids_from_search_results():
+    """The evidence ledger must carry parent:: keys even when the agent only
+    calls search_child_chunks (never retrieve_parent_chunks). Search
+    ToolMessages list 'Parent ID:' lines (agent_tools._format_results), and
+    evaluate.citation_faithfulness sees only the keys — without harvesting,
+    every Sources line scores whitelist_rate 0.0 despite grounded retrieval
+    (the live citation guard is unaffected: it also parses tool messages)."""
+    import src.agent_nodes as an_mod
+    from src.agent_nodes import should_compress_context
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    msgs = [
+        AIMessage(content="", tool_calls=[{
+            "name": "search_child_chunks",
+            "args": {"query": "Ephrin B1 forward signaling"}, "id": "t1"}]),
+        ToolMessage(content=(
+            "--- RESULT 1 (similarity: 0.611, channels: vec) ---\n"
+            "Parent ID: Davy_et_al_2004_Ephrin-B1_md#results#abc123\n"
+            "Content: ..."), name="search_child_chunks", tool_call_id="t1"),
+    ]
+    state = {"messages": list(msgs), "retrieval_keys": set()}
+    saved = an_mod.MAX_ITERATIONS
+    an_mod.MAX_ITERATIONS = 10  # force the token-threshold branch
+    try:
+        cmd = should_compress_context(state)
+    finally:
+        an_mod.MAX_ITERATIONS = saved
+    keys = cmd.update["retrieval_keys"]
+    assert "parent::Davy_et_al_2004_Ephrin-B1_md#results#abc123" in keys, sorted(keys)
+    assert any(k.startswith("search::") for k in keys), keys
+    print("  ✓ retrieval ledger: parent:: keys harvested from search ToolMessages")
+
+
 
 
 # ---------------------------------------------------------------------------
