@@ -136,3 +136,43 @@ ImportError when `src/` is on sys.path directly (CLI/test entry), silently
 killing the whole broaden branch — all intra-`src` imports now fall back to
 top-level imports (`agent_tools.py` ×3, matches the existing
 `hybrid_search` pattern).
+
+---
+
+# Round 3 — `scripts/doctor.py` runtime self-diagnostics (2026-08-28)
+
+Borrowed mechanisms (research-hub doctor.py architecture + haiku.rag doctor
+CLI checks; see `/Disk_bot/notes/健康检查_横向调研.md`):
+
+```
+python3 scripts/doctor.py                 # text report, all checks
+python3 scripts/doctor.py --json          # machine-readable (dashboard/CI)
+python3 scripts/doctor.py --strict        # surface demoted known-noise
+python3 scripts/doctor.py --skip-network  # fully offline
+python3 scripts/doctor.py --doi-report PATH.md   # write DOI review list
+python3 scripts/doctor.py --kb geo_rag    # any registered library
+```
+
+Check surface (all zero-LLM):
+
+| Check | What it verifies | Status on drift |
+|---|---|---|
+| `integrity_chroma` / `_fts` | PRAGMA quick_check on both sqlite files | FAIL if corrupt |
+| `chroma_population` | chunk/parent/source counts | — |
+| `chroma_orphans` | chroma sources with no parent_store file (distinguishes removed-to-disabled [WARN, expected] from truly lost [FAIL]) | |
+| `ps_unvectorized` | parent_store files never embedded into chroma | WARN + re-ingest remedy |
+| `fts_coverage` | every parent_store source FTS-indexed (compares through the sanitize mapping — FTS stores raw `X.md`, files are `X_md`) | WARN + rebuild remedy |
+| `fts_chroma_parent_parity` | parent counts within 2% (generational chunking drift is tolerable; dedup works at parent_id level) | WARN if diverged |
+| `parent_store_integrity` | all JSONs parse, none empty | FAIL if corrupt |
+| `reference_graph` | file present, edge endpoints closed, orphan count | FAIL/INFO |
+| `refgraph_parity` | graph papers == parent_store sources | WARN on drift |
+| `doi_quality` | junk/truncated DOIs + duplicate-DOI groups (title-similarity verdicts) | WARN, demoted to INFO by default (`--strict` shows) |
+| `disk_*` | free space on data dirs | FAIL <1 GB, WARN <5 GB |
+| `zotero_api` | local API probe with `Zotero-Allowed-Request` header, 60s result cache | WARN offline (never FAIL — offline-usable philosophy) |
+| `endpoint_*` | embed/LLM URL configured (existence, not probed) | INFO |
+
+Design (research-hub three-piece): `CheckResult(name, status, message,
+remedy, details)` — every WARN/FAIL carries a copy-pasteable fix command;
+each check runs in try/except isolation; exit code = number of FAILs only
+(CI-safe). Tests: `scripts/test_doctor.py` (3/3, offline fixture library
+mirroring the production raw-vs-sanitized source naming).
