@@ -14,6 +14,7 @@ Canonical forms:
   doi   → "10.xxxx/suffix"   (lowercased, prefixes & version suffixes stripped)
   arxiv → "2103.12345"       (version stripped, arXiv:/abs/ prefix stripped)
   pmid  → digits only
+  pmcid → "PMC3452677"       (PMC prefix required; bare digits → PMID)
 
 All zero-LLM, pure functions.
 """
@@ -96,22 +97,45 @@ _PMID_RE = re.compile(r"^\s*(?:pmid[:\s]*)?(\d{1,9})\s*$", re.I)
 
 
 def normalize_pmid(raw: str) -> Optional[str]:
-    """"PMID: 34526773" / "34526773" → "34526773"."""
+    """Extract & canonicalize a PMID: digits only, pmid: prefix stripped."""
     if raw is None:
         return None
     m = _PMID_RE.match(str(raw).strip())
     return m.group(1) if m else None
 
 
+# --- PMCID -------------------------------------------------------------------
+
+_PMCID_RE = re.compile(r"\bPMC\s?(\d{5,9})\b", re.I)
+
+
+def normalize_pmcid(raw: str) -> Optional[str]:
+    """Extract & canonicalize a PMCID: canonical form is the bare `PMC<digits>`.
+
+    "PMCID: PMC3452677" / "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3452677/"
+    → "PMC3452677". Distinguishing PMID vs PMCID matters: both are digit
+    strings, so a bare number is treated as PMID (never PMC) and PMCID only
+    matches when the PMC prefix is present.
+    """
+    if raw is None:
+        return None
+    m = _PMCID_RE.search(str(raw))
+    return f"PMC{m.group(1)}" if m else None
+
+
 def detect_identifier(raw: str) -> Tuple[str, Optional[str]]:
-    """Classify raw text → (kind, canonical) where kind ∈ {doi, arxiv, pmid,
-    unknown}. First match wins (DOI before arXiv before PMID)."""
+    """Classify raw text → (kind, canonical) where kind ∈ {doi, arxiv, pmcid,
+    pmid, unknown}. First match wins (DOI before arXiv before PMCID before
+    PMID — the PMC prefix must be checked before the bare-digit PMID rule)."""
     doi = normalize_doi(raw)
     if doi:
         return "doi", doi
     ax = normalize_arxiv(raw)
     if ax:
         return "arxiv", ax
+    pc = normalize_pmcid(raw)
+    if pc:
+        return "pmcid", pc
     pm = normalize_pmid(raw)
     if pm:
         return "pmid", pm

@@ -11,6 +11,8 @@ verifies every citation against the source's DOI/title before allowing it.
 This module provides:
   - title_similarity(a, b)  → normalized-token Jaccard + containment blend
   - verify_zotero_hit(query_title, query_doi, hit) → (ok, score, reason)
+  - verify_zotero_hit_ids(query_title, {doi,pmid,pmcid}, hit) → multi-
+    identifier variant (paperIdentity keys; PMID/PMCID exact-match)
   - pick_best_hit(candidates, query_title, query_doi) → best candidate or None
 
 All zero-LLM. Env tunables:
@@ -96,9 +98,12 @@ def verify_zotero_hit(query_title: str, query_doi: str,
 
     Returns (ok, score, reason):
       ok=True  → hit is plausibly the same paper
-      ok=False → reject (score < threshold, or DOI conflict)
-    DOI logic: if both DOIs present and they conflict → reject regardless of
-    title score; if they agree → accept even at lower title similarity.
+      ok=False → reject (score < threshold, or identifier conflict)
+    Identifier logic (paperIdentity, strongest-first):
+      - PMID / PMCID present on both sides: agree → accept at any title
+        score; conflict → reject outright (same strength as DOI conflicts).
+      - DOI present on both: agree → accept; conflict → reject.
+      - Otherwise fall back to title similarity (≥ MIN_SIM).
     """
     sim = title_similarity(query_title, hit.get("title", ""))
     dm = doi_match(query_doi, hit.get("doi", ""))
@@ -111,21 +116,61 @@ def verify_zotero_hit(query_title: str, query_doi: str,
     return False, sim, "below-threshold"
 
 
+def verify_zotero_hit_ids(query_title: str,
+                          query_ids: Dict[str, str],
+                          hit: Dict[str, str]) -> Tuple[bool, float, str]:
+    """Multi-identifier variant of verify_zotero_hit (paperIdentity keys).
+
+    query_ids may carry any of {doi, pmid, pmcid} — all normalized via
+    identifiers.* before comparison. Registry-number identifiers (PMID/
+    PMCID) are exact-equality; DOI uses the two-tier prefix rule.
+    """
+    sim = title_similarity(query_title, hit.get("title", ""))
+    from identifiers import (normalize_pmid, normalize_pmcid,
+                             normalize_doi, doi_prefix_agree)
+    for kind in ("pmid", "pmcid"):
+        norm = normalize_pmid if kind == "pmid" else normalize_pmcid
+        qv, hv = norm(query_ids.get(kind, "")), norm(hit.get(kind, ""))
+        if qv and hv:
+            return (True, sim, f"{kind}-agrees") if qv == hv \
+                else (False, sim, f"{kind}-conflict")
+    qd = normalize_doi(query_ids.get("doi", "") or "")
+    hd = normalize_doi(hit.get("doi", "") or "")
+    if qd and hd:
+        if qd == hd or doi_prefix_agree(qd, hd, min_prefix=MIN_DOI_PREFIX):
+            return True, sim, "doi-agrees"
+        return False, sim, "doi-conflict"
+    if sim >= MIN_SIM:
+        return True, sim, "title-match"
+    return False, sim, "below-threshold"
+
+
 def pick_best_hit(candidates: list, query_title: str,
-                  query_doi: str = "") -> Optional[Dict]:
-    """Scan candidates (list of {key, title, doi, ...}), return the first
-    verified hit in *score order*, or None when nothing verifies.
+                  query_doi: str = "",
+                  query_ids: Optional[Dict[str, str]] = None) -> Optional[Dict]:
+    """Scan candidates (list of {key, title, doi, pmid, pmcid, ...}), return
+    the first verified hit in *score order*, or None when nothing verifies.
 
     This replaces the old blind `items[0]` pickup.
+
+    query_ids (optional) carries extra paperIdentity keys {pmid, pmcid};
+    when provided, verification goes through verify_zotero_hit_ids
+    (multi-identifier), else the classic DOI+title path.
     """
     scored = []
+    qids: Dict[str, str] = dict(query_ids) if query_ids else {}
+    use_ids = any(qids.values())
     for cand in candidates:
         if not isinstance(cand, dict) or not cand.get("key"):
             continue
-        ok, score, reason = verify_zotero_hit(query_title, query_doi, cand)
+        if use_ids:
+            qids.setdefault("doi", query_doi)
+            ok, score, reason = verify_zotero_hit_ids(query_title, qids, cand)
+        else:
+            ok, score, reason = verify_zotero_hit(query_title, query_doi, cand)
         scored.append((ok, score, reason, cand))
-    # DOI-agreeing hits first, then by score
-    scored.sort(key=lambda t: (not (t[2] == "doi-agrees"), -t[1]))
+    # identifier-agreeing hits first, then by score
+    scored.sort(key=lambda t: (not t[2].endswith("-agrees"), -t[1]))
     for ok, _score, _reason, cand in scored:
         if ok:
             return cand

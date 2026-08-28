@@ -131,6 +131,49 @@ def test_zotero_match_rejects_wrong_paper():
     print("  ✓ zotero_match: DOI conflict rejected; pick_best_hit correct")
 
 
+def test_zotero_match_multi_identifier():
+    """P3 paperIdentity: PMID/PMCID exact-match verification via
+    verify_zotero_hit_ids; registry conflicts reject regardless of title."""
+    from src.zotero_match import verify_zotero_hit_ids, pick_best_hit
+    title = "Eph receptor signalling in axon guidance"
+    # PMID agrees despite garbage title → accept
+    ok, _s, r = verify_zotero_hit_ids(
+        title, {"pmid": "PMID: 34526773"},
+        {"title": "completely different words", "pmid": "34526773", "doi": ""})
+    assert ok and r == "pmid-agrees", (ok, r)
+    # PMID conflict → reject even with identical titles
+    ok, _s, r = verify_zotero_hit_ids(
+        title, {"pmid": "34526773"},
+        {"title": title, "pmid": "99999999", "doi": ""})
+    assert not ok and r == "pmid-conflict", (ok, r)
+    # PMCID via PMC-link form
+    ok, _s, r = verify_zotero_hit_ids(
+        title, {"pmcid": "PMC3452677"},
+        {"title": "whatever", "pmcid": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3452677/"})
+    assert ok and r == "pmcid-agrees", (ok, r)
+    # DOI still two-tier inside the ids variant
+    ok, _s, r = verify_zotero_hit_ids(
+        title, {"doi": "10.1016/j.ydbio.2021.01.002"},
+        {"title": title, "doi": "10.1016/J.YDBIO.2021.01.002"})
+    assert ok and r == "doi-agrees", (ok, r)
+    ok, _s, r = verify_zotero_hit_ids(
+        title, {"doi": "10.1016/j.ydbio.2021.01.002"},
+        {"title": title, "doi": "10.1038/s41586-020-2649-2"})
+    assert not ok and r == "doi-conflict", (ok, r)
+    # no identifiers at all → falls back to title threshold
+    ok, _s, r = verify_zotero_hit_ids(
+        title, {}, {"title": title, "doi": "", "pmid": "", "pmcid": ""})
+    assert ok and r == "title-match", (ok, r)
+    # pick_best_hit honors the ids variant through its hit dicts
+    best = pick_best_hit(
+        [{"key": "A", "title": "unrelated quantum optics", "doi": ""},
+         {"key": "B", "title": "something else entirely", "doi": "",
+          "pmid": "34526773"}],
+        title, "", query_ids={"pmid": "34526773"})
+    assert best and best["key"] == "B", best
+    print("  ✓ zotero_match ids: PMID/PMCID exact-match + conflict reject + fallback")
+
+
 # ---------------------------------------------------------------------------
 # evidence_gate
 # ---------------------------------------------------------------------------
@@ -345,7 +388,112 @@ def test_identifier_normalization():
     assert normalize_pmid("PMID: 34526773") == "34526773"
     assert detect_identifier("10.1038/s41586-020-2649-2") == (
         "doi", "10.1038/s41586-020-2649-2")
-    print("  ✓ identifier normalization: doi/arxiv/pmid canonical forms")
+    # P3a: PMCID — canonical PMC<digits>, bare digits stay PMID
+    from src.identifiers import normalize_pmcid
+    assert normalize_pmcid("PMCID: PMC3452677") == "PMC3452677"
+    assert normalize_pmcid("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3452677/") == "PMC3452677"
+    assert normalize_pmcid("pmc 3452677") == "PMC3452677"   # space + case
+    assert normalize_pmcid("34526773") is None              # bare digits → PMID
+    assert detect_identifier("PMCID: PMC3452677") == ("pmcid", "PMC3452677")
+    assert detect_identifier("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3452677/")[0] == "pmcid"
+    assert detect_identifier("34526773") == ("pmid", "34526773")
+    print("  ✓ identifier normalization: doi/arxiv/pmid/pmcid canonical forms")
+
+
+def test_guard_redirect_loop():
+    """P3b: collect_answer redirects when ALL Sources lines are hallucinated;
+    ships (annotated) once the GUARD_REDIRECT_MAX budget is exhausted."""
+    from langchain_core.messages import AIMessage
+    from src.agent_nodes import collect_answer
+
+    def run_once(retries, sources_lines, env=None):
+        os.environ.setdefault("CITATION_GUARD", "1")
+        saved = {k: os.environ.get(k) for k in (env or {})}
+        os.environ.update(env or {})
+        try:
+            body = ("The axon guidance result.\n\n---\n**Sources:**\n"
+                    + "\n".join(f"- {l}" for l in sources_lines))
+            state = {
+                "messages": [AIMessage(content=body, id="m1")],
+                "retrieval_keys": set(),          # nothing verifiable
+                "question": "q", "question_index": 0,
+                "guard_retries": retries,
+            }
+            return collect_answer(state)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    # first attempt: all lines dropped, budget available → redirect
+    out = run_once(0, ["Hallucinated_2020_ghost.md"])
+    assert out.get("guard_redirect") is True, out
+    assert out["guard_retries"] == 1 and out["final_answer"] == ""
+    assert "agent_answers" not in out  # absent = unchanged (LangGraph partial update)
+    # feedback injected, failed answer removed
+    kinds = [type(m).__name__ for m in out["messages"]]
+    assert "HumanMessage" in kinds, kinds
+    assert "citation policy" in out["messages"][-1].content
+    # retry budget exhausted → ships with note, no redirect
+    out2 = run_once(1, ["Hallucinated_2020_ghost.md"])
+    assert out2.get("guard_redirect", False) in (False, None) or not out2.get("guard_redirect"), out2
+    assert out2["final_answer"] and out2["agent_answers"], out2
+    assert "redirected" in out2["guard_note"], out2["guard_note"]
+    # clean answer (whitelisted source) → no redirect, ships normally
+    state3 = {
+        "messages": [AIMessage(
+            content="The axon guidance result.\n\n---\n**Sources:**\n- good_paper.md",
+            id="m3")],
+        "retrieval_keys": {"parent::good_paper.md"},
+        "question": "q", "question_index": 0, "guard_retries": 0,
+    }
+    out3 = collect_answer(state3)
+    assert not out3.get("guard_redirect"), out3
+    assert out3["final_answer"] and out3["agent_answers"], out3
+    print("  ✓ guard redirect: all-hallucinated → retry w/ feedback; budget cap ships")
+
+
+def test_guard_redirect_e2e_subgraph():
+    """P3b end-to-end: fake LLM returns a hallucinated answer then an honest
+    one; the compiled subgraph must redirect once, retry, and ship with the
+    redirect recorded in guard_note. Catches state-channel persistence bugs
+    (guard_redirect stuck True → GraphRecursionError) that node-level tests
+    cannot see."""
+    from langchain_core.messages import AIMessage
+    from src.agentic_graph import create_agent_graph
+
+    answers = [
+        AIMessage(content="Claim A.\n\n---\n**Sources:**\n- Ghost_Paper_2020.md", id="a1"),
+        AIMessage(content="The evidence does not support a specific claim.", id="a2"),
+    ]
+
+    class FakeLLMWithTools:
+        def __init__(self, seq):
+            self.seq = list(seq)
+            self.i = 0
+
+        def bind_tools(self, tools, **k):
+            return self
+
+        def invoke(self, *a, **k):
+            msg = self.seq[min(self.i, len(self.seq) - 1)]
+            self.i += 1
+            return msg
+
+    graph = create_agent_graph(FakeLLMWithTools(answers), [])
+    sub = graph.nodes["agent"].bound
+    state = {
+        "messages": [("user", "What drives axon repulsion?")],
+        "question": "What drives axon repulsion?", "question_index": 0,
+        "retrieval_keys": set(), "context_summary": "",
+    }
+    result = sub.invoke(state, config={"recursion_limit": 50})
+    assert result.get("guard_retries") == 1, result.get("guard_retries")
+    assert len(result.get("agent_answers", [])) == 1
+    assert "redirected" in result.get("guard_note", ""), result.get("guard_note")
+    print("  ✓ guard redirect e2e: subgraph loop redirect→retry→ship, note preserved")
 
 
 def test_doi_match_journal_mates():

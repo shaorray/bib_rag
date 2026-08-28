@@ -68,6 +68,10 @@ def _normalize_item(data: Dict[str, Any], key: str = "") -> Dict[str, str]:
         "key": key or data.get("key") or "",
         "title": data.get("title") or "",
         "doi": data.get("DOI") or "",
+        # paperIdentity multi-identifier keys (P3): PubMed items carry PMID in
+        # callNumber; PMC items in archiveID ("PMC..." or a bare digits field).
+        "pmid": (data.get("callNumber") or "").strip(),
+        "pmcid": (data.get("archive") or "").strip(),
         "year": year,
         "date": date,
         "authors": authors,

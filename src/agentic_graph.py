@@ -37,7 +37,7 @@ from .agent_nodes import (
     collect_answer,
     aggregate_answers,
 )
-from .agent_edges import route_after_rewrite, route_after_orchestrator_call
+from .agent_edges import route_after_rewrite, route_after_orchestrator_call, route_after_collect
 
 
 def create_agent_graph(llm, tools_list):
@@ -88,7 +88,14 @@ def create_agent_graph(llm, tools_list):
     agent_builder.add_edge("tools", "should_compress_context")
     agent_builder.add_edge("compress_context", "orchestrator")
     agent_builder.add_edge("fallback_response", "collect_answer")
-    agent_builder.add_edge("collect_answer", END)
+    agent_builder.add_conditional_edges(
+        "collect_answer",
+        route_after_collect,
+        {
+            "orchestrator": "orchestrator",
+            "__end__": END,
+        },
+    )
 
     agent_subgraph = agent_builder.compile()
 

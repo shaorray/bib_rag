@@ -85,6 +85,12 @@ class AgentState(MessagesState):
     # Deterministic citation-guard note from collect_answer (empty when the
     # guard passed cleanly or is disabled via CITATION_GUARD=0).
     guard_note: str = ""
+    # haiku.rag-style citation-policy redirect (P3b): when the deterministic
+    # guard strips ALL Sources lines, collect_answer sets this instead of
+    # shipping an uncitable answer; route_after_collect sends the agent back
+    # to the orchestrator with the policy feedback. Capped by guard_retries.
+    guard_redirect: bool = False
+    guard_retries: int = 0
     agent_answers: List[dict] = []
     tool_call_count: Annotated[int, operator.add] = 0
     iteration_count: Annotated[int, operator.add] = 0

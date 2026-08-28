@@ -69,3 +69,21 @@ def route_after_orchestrator_call(state: AgentState) -> Literal["tools", "fallba
         return "fallback_response"
 
     return "tools"
+
+
+def route_after_collect(state: AgentState) -> Literal["orchestrator", "__end__"]:
+    """Citation-policy redirect loop (haiku.rag mechanism).
+
+    collect_answer sets guard_redirect=True when the deterministic guard
+    stripped every Sources line (nothing citable survived). Instead of
+    ending the subgraph with an uncitable answer, route back to the
+    orchestrator — collect_answer has already removed the failed answer
+    from `messages` and appended the policy feedback, so the retry sees a
+    clean conversational state plus the instruction. collect_answer itself
+    caps the retries (GUARD_REDIRECT_MAX), so this router only needs to
+    check the flag — an exhausted budget arrives here with the flag unset
+    and the (annotated) answer in final_answer.
+    """
+    if state.get("guard_redirect"):
+        return "orchestrator"
+    return "__end__"

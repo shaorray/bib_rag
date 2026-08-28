@@ -421,6 +421,7 @@ def collect_answer(state: AgentState):
     is_valid = isinstance(last_message, AIMessage) and last_message.content and not last_message.tool_calls
     answer = last_message.content if is_valid else "Unable to generate an answer."
     guard_note = ""
+    guard_redirect = False
     if is_valid and os.environ.get("CITATION_GUARD", "1") != "0":
         try:
             from .citation_guard import enforce_citation_guard
@@ -429,6 +430,12 @@ def collect_answer(state: AgentState):
                 tool_messages=state.get("messages") or [])
             if report.get("dropped"):
                 guard_note = f"[citation_guard] removed {report['dropped']} unverifiable source line(s)"
+            # haiku.rag-style citation policy: an answer whose Sources were
+            # ALL hallucinated (every line dropped) must not ship — set the
+            # redirect flag so the graph can send the agent back to the
+            # orchestrator with feedback instead of finalizing this answer.
+            if report.get("dropped") and not report.get("kept"):
+                guard_redirect = True
         except Exception as e:  # guard must never break answering
             guard_note = f"[citation_guard] skipped ({type(e).__name__})"
         # Answer-side hygiene (paper-qa / CogDoc mechanism): strip inline
@@ -454,9 +461,66 @@ def collect_answer(state: AgentState):
         except Exception:
             pass  # answer-side hygiene is best-effort; never break answering
 
+    # Citation-policy redirect (haiku.rag mechanism): an answer with zero
+    # surviving Sources goes back to the orchestrator with feedback instead of
+    # shipping. Capped — after GUARD_REDIRECT_MAX retries the answer ships
+    # with its guard_note so the loop can never wedge the graph.
+    max_redirects = int(os.environ.get("GUARD_REDIRECT_MAX", "1"))
+    if guard_redirect:
+        note = (guard_note + "; " if guard_note else "") \
+            + "[citation_guard] redirected: all Sources lines unverifiable"
+        if state.get("guard_retries", 0) < max_redirects:
+            feedback = (
+                "Your previous answer failed the citation policy: every entry in "
+                "its Sources section was unverifiable against retrieved evidence "
+                "and was removed. Answer ONLY from the retrieved evidence, and "
+                "cite only papers that actually appear in your retrieval results. "
+                "If the evidence does not support an answer, say so explicitly "
+                "and do not invent sources."
+            )
+            return {
+                "guard_redirect": True,
+                "guard_retries": state.get("guard_retries", 0) + 1,
+                "final_answer": "",
+                "guard_note": note,
+                "messages": ([
+                    # Drop the failed answer so the retry does not see it as
+                    # the latest AI turn; feedback rides as a user turn.
+                    RemoveMessage(id=last_message.id),
+                ] if getattr(last_message, "id", None) else []) + [
+                    HumanMessage(content=feedback),
+                ],
+            }
+        # budget exhausted → ship the (source-less) answer, transparently noted
+        return {
+            "final_answer": answer,
+            "guard_note": note,
+            "agent_answers": [
+                {
+                    "index": state["question_index"],
+                    "question": state["question"],
+                    "answer": answer,
+                    "retrieval_keys": sorted(state.get("retrieval_keys", set()) or set()),
+                }
+            ],
+        }
+
+    # Citation-policy redirect note: if a previous round already redirected,
+    # keep that fact in the final note (guard_note is a plain channel — a
+    # fresh '' here would erase the redirect audit trail).
+    prior_note = state.get("guard_note", "") or ""
+    if guard_note and prior_note and prior_note not in guard_note:
+        guard_note = f"{prior_note}; {guard_note}"
+    elif not guard_note and prior_note:
+        guard_note = prior_note
+
     return {
         "final_answer": answer,
         "guard_note": guard_note,
+        # LangGraph channels persist values unless overwritten — an earlier
+        # redirect on this subgraph run must be cleared here or
+        # route_after_collect would loop back to the orchestrator forever.
+        "guard_redirect": False,
         "agent_answers": [
             {
                 "index": state["question_index"],
