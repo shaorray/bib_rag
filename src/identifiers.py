@@ -52,8 +52,10 @@ def normalize_doi(raw: str) -> Optional[str]:
         return None
     doi = m.group(1).lower().rstrip(".")
     doi = _DOI_TRAIL_RE.sub("", doi)
-    # strip version suffix: ...v2 / ...V3 at the very end (after the slash part)
-    doi = re.sub(r"v\d+$", "", doi)
+    # strip version suffix: ...002v2 / ...002.v2 at the very end. Only a "v"
+    # preceded by a digit (optionally via a dot) is a version marker —
+    # Oxford-style DOIs like 10.1093/nar/gkv370 legitimately end in "v<digits>".
+    doi = re.sub(r"(?<=\d)\.?v\d+$", "", doi)
     return doi or None
 
 
@@ -133,8 +135,8 @@ def doi_prefix_agree(a: str, b: str, min_prefix: int = 8) -> Optional[bool]:
         return None
     if na == nb:
         return True
-    body_a = re.sub(r"[._-]?v\d+$", "", na)
-    body_b = re.sub(r"[._-]?v\d+$", "", nb)
+    body_a = re.sub(r"(?<=\d)[._-]?v\d+$", "", na)
+    body_b = re.sub(r"(?<=\d)[._-]?v\d+$", "", nb)
     if body_a == body_b:
         return True
     # truncated metadata: the shorter DOI is a strict PREFIX of the longer one

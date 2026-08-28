@@ -476,6 +476,62 @@ def check_disk(cfg: dict) -> List[CheckResult]:
 
 
 # ---------------------------------------------------------------------------
+# C5b — retracted DOIs (offline, snapshot-based)
+# ---------------------------------------------------------------------------
+
+def check_retractions(cfg: dict, strict: bool = False) -> List[CheckResult]:
+    """Flag papers whose DOI appears in the Retraction Watch snapshot."""
+    try:
+        from retraction_watch import load_retractions, check_sources, snapshot_path
+    except ImportError:
+        from src.retraction_watch import (  # type: ignore
+            load_retractions, check_sources, snapshot_path)
+    except Exception:
+        return [CheckResult("retraction_watch", INFO,
+                            "retraction_watch module unavailable — skipped")]
+    if os.environ.get("RETRACTION_CHECK", "1") == "0":
+        return [CheckResult("retraction_watch", INFO, "disabled via RETRACTION_CHECK=0")]
+    snap = snapshot_path()
+    if not os.path.exists(snap):
+        return [CheckResult(
+            "retraction_watch", INFO,
+            "no Retraction Watch snapshot — run: "
+            "/usr/bin/python3.10 -B src/retraction_watch.py --update",
+            remedy="/usr/bin/python3.10 -B src/retraction_watch.py --update")]
+    retr = load_retractions(snapshot=snap)
+    if not retr:
+        return [CheckResult(
+            "retraction_watch", WARN,
+            f"snapshot exists but empty/unparseable: {snap}",
+            remedy=f"re-download: /usr/bin/python3.10 -B src/retraction_watch.py --update")]
+    hits = check_sources(store_dir=cfg["parent_store_dir"], retractions=retr)
+    if not hits:
+        return [CheckResult(
+            "retraction_watch", OK,
+            f"0 retracted papers among the library's DOIs "
+            f"(snapshot: {len(retr):,} DOIs)")]
+    def _detail(d: str) -> str:
+        try:
+            from retraction_watch import retraction_details
+        except ImportError:
+            from src.retraction_watch import retraction_details  # type: ignore
+        info = retraction_details(d, snapshot=snap) or {}
+        bits = [info.get("nature", ""), info.get("reason", "").rstrip(";"),
+                info.get("date", "").split(" ")[0]]
+        return " / ".join(b for b in bits if b)
+    shown = sorted(hits.items(), key=lambda kv: kv[1]["doi"])[:3]
+    details = "; ".join(
+        f"{t[:40]} {h['doi']} [{_detail(h['doi'])}]" for t, h in shown)
+    out = [CheckResult(
+        "retraction_watch", WARN,
+        f"{len(hits)} RETRACTED paper(s) in the library: {details}"
+        + (" ..." if len(hits) > 3 else ""),
+        remedy="verify on https://retractionwatch.com and remove/quarantine "
+               "the paper: move it out of the markdown dir, rebuild indexes")]
+    return out
+
+
+# ---------------------------------------------------------------------------
 # C7 — Zotero local API (network, cached)
 # ---------------------------------------------------------------------------
 
@@ -577,6 +633,7 @@ def run_doctor(skip_network: bool = False, strict: bool = False,
         lambda: check_index_drift(cfg, strict),
         lambda: check_reference_graph(cfg),
         lambda: check_doi_quality(cfg, doi_report, strict),
+        lambda: check_retractions(cfg, strict),
         lambda: check_disk(cfg),
     ]
     if not skip_network:

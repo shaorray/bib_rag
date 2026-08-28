@@ -50,7 +50,9 @@ titles from "Developmental Biology **207, available online..." style noise.
 | 6. Tag migration (legacy) | `migrate_topics.py` | converts older topic representations → `topic_<kw>:1` boolean keys |
 
 `apply_tags.py` = tags-only variant of step 2 (use when there is no clean
-metadata CSV). `scripts/bib_to_parent_store.py` and `fill_meta_key_in_parent_store.py` are the pre-merge originals (fill_meta_key archived; bib_to_parent_store still holds the matchers bind_zotero imports). `scripts/remove_paper.py` is the reset button for a paper whose
+metadata CSV). `bib_to_parent_store.py` still holds the matchers that
+`bind_zotero.py` imports (the old `fill_meta_key_in_parent_store.py` is
+archived; its logic merged into bind_zotero). `scripts/remove_paper.py` is the reset button for a paper whose
 metadata is wrong beyond repair: delete, fix the source, re-index.
 
 ## Invariants

@@ -16,10 +16,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "metadata"))
 
 import bib_utils as U
 import bib_to_parent_store as B
-import fill_meta_key_in_parent_store as F
 import zotero_access as ZA
 
 
@@ -287,25 +287,6 @@ class TestBibToParentStoreMatch(unittest.TestCase):
             self.entries,
         )
         self.assertIsNotNone(entry)
-
-
-# ---------------------------------------------------------------------------
-# fill_meta_key helpers
-# ---------------------------------------------------------------------------
-
-class TestFillMetaKeyHelpers(unittest.TestCase):
-    def test_norm(self):
-        self.assertEqual(F.norm("The  md   model!"), "the_md_model")
-
-    def test_strip_pdf_title_prefix(self):
-        s = F.strip_pdf_title_prefix("Smith et al. - 2020 - A Great Paper")
-        self.assertEqual(s, "A Great Paper")
-        s2 = F.strip_pdf_title_prefix("2020 - Leading Year Title")
-        self.assertEqual(s2, "Leading Year Title")
-
-    def test_shared_normalize_doi(self):
-        # fill_meta_key now uses bib_utils.normalize_doi
-        self.assertEqual(F.normalize_doi("http://dx.doi.org/10.1/x."), "10.1/x")
 
 
 # ---------------------------------------------------------------------------

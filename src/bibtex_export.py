@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""
+bibtex_export.py — DOI → BibTeX export with missing-field completion.
+
+Borrowed mechanism (paper-qa doi_to_bibtex + format_bibtex — see the
+citation-management cross-survey notes): Crossref's official
+`/transform/application/x-bibtex` endpoint renders a DOI into a full BibTeX
+entry server-side; locally we then (a) rewrite the citation key into the
+`lastname_year_firsttitleword` convention the rest of this toolkit uses,
+(b) fill missing fields (author/journal/year/title) from parent_store
+metadata when Crossref returns an incomplete entry, and (c) optionally
+render an ASCII-safe key (diacritics stripped).
+
+Design constraints:
+  - The ONLY network call is the Crossref transform GET. Everything else is
+    pure string work — zero LLM, graceful degradation on any failure
+    (returns None / skips the DOI, never raises through the caller).
+  - Reuses identifiers.normalize_doi so the key space matches zotero_match
+    and the reference graph.
+  - Offline path: bibtex_from_meta() synthesizes a minimal entry from
+    parent_store metadata alone (no network) — quality flag included.
+
+Usage:
+    from bibtex_export import doi_to_bibtex, bibtex_from_meta, export_answers_bib
+    entry = doi_to_bibtex("10.1016/j.ydbio.2021.01.002", mailto="you@example.com")
+
+CLI:
+    python3 bibtex_export.py --dois 10.1016/j.ydbio.2021.01.002 10.1038/...
+        [--meta-dir <parent_store>] [--out refs.bib]
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+import json
+import time
+import argparse
+import unicodedata
+import urllib.parse
+import urllib.request
+from typing import Dict, List, Optional, Tuple
+
+try:
+    from .identifiers import normalize_doi
+except ImportError:  # src/ on sys.path directly (CLI/tests)
+    from identifiers import normalize_doi
+
+try:
+    from .kb_config import get_config
+except ImportError:
+    from kb_config import get_config
+
+# ---------------------------------------------------------------------------
+# Tunables
+# ---------------------------------------------------------------------------
+
+CROSSREF_TIMEOUT = _T = 15            # seconds per HTTP call
+CROSSREF_MIN_INTERVAL = 1.0           # polite-pool throttle between calls
+MAX_RETRIES = 2
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default) or default
+
+
+# ---------------------------------------------------------------------------
+# Key generation (paper-qa create_bibtex_key, adapted)
+# ---------------------------------------------------------------------------
+
+def _ascii_fold(text: str) -> str:
+    """Strip diacritics (NFKD → drop combining marks), keep ASCII."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", text or "")
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def make_bibtex_key(author_lastname: str, year: str, title: str,
+                    existing: Optional[set] = None) -> str:
+    """`lastname_year_firsttitleword` — Zotero/Better-BibTeX convention this
+    repo already uses in filenames. Collision → a/b/c suffix (seerai rule)."""
+    last = re.sub(r"[^a-zA-Z]", "", _ascii_fold(author_lastname or "unknown")).lower() or "unknown"
+    y = re.sub(r"\D", "", str(year or ""))[:4] or "nd"
+    # word chars incl. digits: gene names like Ephb1/EphrinB2 stay whole
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9]*|\d+", _ascii_fold(title or ""))
+    first = (words[0] if words else "untitled").lower()
+    key = f"{last}_{y}_{first}"
+    taken = existing or set()
+    if key not in taken:
+        return key
+    for suffix in "abcdefghij":
+        cand = f"{key}{suffix}"
+        if cand not in taken:
+            return cand
+    return f"{key}_{abs(hash(key)) % 10000}"
+
+
+# ---------------------------------------------------------------------------
+# Crossref transform endpoint (paper-qa doi_to_bibtex)
+# ---------------------------------------------------------------------------
+
+def _crossref_transform(doi: str, mailto: str) -> Optional[str]:
+    """GET https://api.crossref.org/works/<doi>/transform/application/x-bibtex.
+    Returns the rendered BibTeX string or None on any failure."""
+    url = (f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='')}"
+           f"/transform/application/x-bibtex?mailto={urllib.parse.quote(mailto)}")
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent",
+                   f"bib_rag_bibtex_export/1.0 (mailto:{mailto})")
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=_T) as r:
+                body = r.read().decode("utf-8", errors="replace").strip()
+            if body.startswith("@"):
+                return body
+        except Exception:
+            if attempt == MAX_RETRIES - 1:
+                return None
+            time.sleep(1.5 * (attempt + 1))  # linear backoff, polite pool
+    return None
+
+
+def _rewrite_key(bibtex: str, new_key: str) -> str:
+    """Replace the entry key Crossref generated with our canonical one."""
+    m = re.match(r"(@\w+\s*\{\s*)([^,\s]+)(\s*,)", bibtex)
+    if not m:
+        return bibtex
+    return bibtex[:m.start(2)] + new_key + bibtex[m.end(2):]
+
+
+_BIBTEX_FIELD_RE = re.compile(
+    r"^\s*(\w+)\s*=\s*([\{\"']).*?\2\s*,?\s*$", re.I | re.S | re.M)
+
+
+def bibtex_fields(bibtex: str) -> Dict[str, str]:
+    """Best-effort field extraction from a rendered BibTeX string. Field
+    values are brace-balanced (Crossref nests braces in protective wraps)."""
+    out: Dict[str, str] = {}
+    for m in re.finditer(r"(\w+)\s*=\s*", bibtex):
+        start = m.end()
+        rest = bibtex[m.end():]
+        if not rest or rest[0] not in "{\"'":
+            continue
+        open_ch = rest[0]
+        close_ch = "}" if open_ch == "{" else open_ch
+        depth = 1 if open_ch == "{" else 0
+        i = 1
+        while i < len(rest) and depth > 0:
+            c = rest[i]
+            if c == "{" and open_ch == "{":
+                depth += 1
+            elif c == "}" and open_ch == "{":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif c == close_ch and open_ch != "{":
+                break
+            i += 1
+        if open_ch == "{":
+            out[m.group(1).lower()] = rest[1:i].strip()
+        else:
+            out[m.group(1).lower()] = rest[1:i].strip()
+    return out
+
+
+def _fill_missing_fields(bibtex: str, meta: Dict[str, str]) -> str:
+    """Insert meta-sourced values for fields Crossref omitted
+    (paper-qa missing_replacements, string-level — no pybtex dependency)."""
+    fields = bibtex_fields(bibtex)
+    fills = []
+    for field in ("author", "journal", "year", "title"):
+        if fields.get(field):
+            continue
+        val = (meta.get(field) or "").strip()
+        if not val:
+            continue
+        if field == "author" and "," not in val and ";" in val:
+            # 'Last, First; Last, First' expected; pass through as-is otherwise
+            val = " and ".join(p.strip() for p in val.split(";"))
+        fills.append((field, val))
+    if not fills:
+        return bibtex
+    # append before the closing brace of the entry
+    idx = bibtex.rstrip().rfind("}")
+    if idx <= 0:
+        return bibtex
+    add = "".join(f",\n  {f} = {{{v}}}" for f, v in fills)
+    return bibtex[:idx].rstrip().rstrip(",") + add + "\n" + bibtex[idx:]
+
+
+def doi_to_bibtex(doi: str, mailto: str = "",
+                  meta: Optional[Dict[str, str]] = None,
+                  existing_keys: Optional[set] = None) -> Optional[str]:
+    """DOI → complete BibTeX entry (Crossref transform + local completion).
+
+    Returns None when the DOI does not resolve or Crossref is unreachable.
+    `meta` (optional {author, journal, year, title}) fills missing fields.
+    """
+    nd = normalize_doi(doi)
+    if not nd:
+        return None
+    mailto = mailto or _env("CROSSREF_MAILTO", "bib_rag@example.org")
+    raw = _crossref_transform(nd, mailto)
+    if not raw:
+        return None
+    # canonical key: first author lastname + year + first title word
+    fields = bibtex_fields(raw)
+    year = (fields.get("year") or (meta or {}).get("year") or "")
+    author_lead = re.split(r"\s+and\s+", fields.get("author", ""))[0]
+    last = author_lastname(author_lead=author_lead, meta=meta or {})
+    key = make_bibtex_key(last, year, fields.get("title", ""), existing_keys)
+    out = _rewrite_key(raw, key)
+    if meta:
+        out = _fill_missing_fields(out, meta)
+    return out
+
+
+def author_lastname(author_lead: str = "", meta: Optional[Dict[str, str]] = None) -> str:
+    """Pull the surname out of a Crossref author string ('Last, First') or
+    fall back to the parent filename stored in meta['source']."""
+    meta = meta or {}
+    if author_lead:
+        lead = author_lead.replace("{", "").replace("}", "").strip()
+        if "," in lead:
+            return lead.split(",")[0]
+        return lead.split()[-1] if lead.split() else ""
+    src = meta.get("source", "")
+    m = re.match(r"^([A-Za-z][\w'\-]*?)[ _\-]+", os.path.basename(src))
+    return m.group(1) if m else ""
+
+
+# ---------------------------------------------------------------------------
+# Offline path: synthesize from parent_store metadata alone
+# ---------------------------------------------------------------------------
+
+def bibtex_from_meta(meta: Dict[str, str],
+                     existing_keys: Optional[set] = None) -> Optional[str]:
+    """Minimal @article/@misc entry from parent_store metadata. No network.
+    PubMed-style author lists ('Last FM; Last FM') are converted to BibTeX
+    'Last, FM and Last, FM'. Returns None when there is not even a title."""
+    title = (meta.get("title") or "").strip()
+    if not title:
+        return None
+    year = (meta.get("year") or "").strip()
+    authors = (meta.get("authors") or meta.get("author") or "").strip()
+    if authors and ";" in authors:
+        # PubMed format 'Paulson AF; Fang X' → BibTeX 'Paulson, AF and Fang, X'
+        parts = []
+        for p in (x.strip() for x in authors.split(";")):
+            if not p:
+                continue
+            toks = p.split()
+            if len(toks) >= 2:          # 'Last FM' → 'Last, FM'
+                parts.append(f"{toks[0]}, {' '.join(toks[1:])}")
+            else:
+                parts.append(p)
+        authors = " and ".join(parts)
+    journal = (meta.get("journal") or "").strip()
+    doi = normalize_doi(meta.get("doi", "") or "")
+    last = author_lastname(meta=meta)
+    key = make_bibtex_key(last, year, title, existing_keys)
+    etype = "article" if journal else "misc"
+    fields = [f"  title = {{{title}}}"]
+    if authors:
+        fields.append(f"  author = {{{authors}}}")
+    if journal:
+        fields.append(f"  journal = {{{journal}}}")
+    if year:
+        fields.append(f"  year = {{{year}}}")
+    if doi:
+        fields.append(f"  doi = {{{doi}}}")
+    lines = [f"@{etype}{{{key},"] + [f + "," for f in fields[:-1]] + [fields[-1], "}"]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Batch export from parent_store (per-paper meta extraction)
+# ---------------------------------------------------------------------------
+
+def load_paper_meta(parent_store_dir: str, source: str) -> Dict[str, str]:
+    """{title, year, journal, authors, doi} for a source file, from its
+    parent_store JSON (first parent carries the meta). Accepts the source
+    filename ('paper.md' → 'paper_md.json') or the store filename directly
+    ('paper_md.json'); tries both candidate paths."""
+    stem = os.path.splitext(os.path.basename(source))[0]
+    safe = re.sub(r"[^\w\-]", "_", stem)[:100]
+    candidates = [os.path.join(parent_store_dir, f"{safe}.json")]
+    # source '10068468.md' → sanitized '10068468' → store may be '10068468_md.json'
+    if not safe.endswith("_md"):
+        alt = os.path.join(parent_store_dir, f"{safe}_md.json")
+    else:
+        alt = os.path.join(parent_store_dir, f"{safe[:-3]}.json")
+    path = None
+    for cand in (os.path.join(parent_store_dir, f"{safe}.json"), alt):
+        if os.path.exists(cand):
+            path = cand
+            break
+    if path is None:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            parents = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    meta = (parents[0].get("meta", {}) or {}) if parents else {}
+    return {
+        "title": meta.get("title", "") or "",
+        "year": str(meta.get("year", "") or ""),
+        "journal": meta.get("journal", "") or "",
+        "authors": meta.get("authors", "") or meta.get("author", "") or "",
+        "doi": meta.get("doi", "") or "",
+        "source": source,
+    }
+
+
+def export_answers_bib(sources: List[str], out_path: str, mailto: str = "",
+                       offline: bool = False,
+                       store_dir: Optional[str] = None) -> Dict:
+    """Export a References .bib for the given source filenames.
+
+    online  : Crossref transform per DOI (throttled), metadata fill on top
+    offline : synthesized from parent_store meta only
+    `store_dir` overrides the active library's parent_store (tests / other KBs).
+    Returns {written, skipped, errors, out_path}.
+    """
+    if store_dir is None:
+        cfg = get_config()
+        store = cfg["parent_store_dir"]
+    else:
+        store = store_dir
+    existing: set = set()
+    entries: List[str] = []
+    written = skipped = errors = 0
+    for src in sources:
+        meta = load_paper_meta(store, src)
+        entry = None
+        if offline:
+            entry = bibtex_from_meta(meta, existing)
+        else:
+            doi = normalize_doi(meta.get("doi", ""))
+            if doi:
+                entry = doi_to_bibtex(doi, mailto=mailto, meta=meta,
+                                      existing_keys=existing)
+            if entry is None:
+                entry = bibtex_from_meta(meta, existing)  # graceful fallback
+        if not entry:
+            skipped += 1
+            continue
+        key = entry.split("{", 1)[1].split(",", 1)[0]
+        existing.add(key)
+        entries.append(entry)
+        written += 1
+    if entries:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(entries) + "\n")
+    return {"written": written, "skipped": skipped, "errors": errors,
+            "out_path": out_path}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="DOI → BibTeX export (bib_rag)")
+    ap.add_argument("--dois", nargs="*", help="DOIs to convert")
+    ap.add_argument("--meta-dir", help="parent_store dir (for --sources mode)")
+    ap.add_argument("--sources", nargs="*", help="source filenames to export")
+    ap.add_argument("--out", required=True, help="output .bib path")
+    ap.add_argument("--mailto", default=_env("CROSSREF_MAILTO"),
+                    help="contact email for Crossref polite pool (or CROSSREF_MAILTO env)")
+    ap.add_argument("--offline", action="store_true",
+                    help="synthesize from parent_store metadata only (no network)")
+    args = ap.parse_args()
+
+    if args.dois:
+        ok = 0
+        for doi in args.dois:
+            entry = doi_to_bibtex(doi, mailto=args.mailto)
+            if entry:
+                ok += 1
+                print(entry, "\n")
+            else:
+                print(f"% FAILED: {doi}", file=sys.stderr)
+        print(f"% {ok}/{len(args.dois)} entries fetched", file=sys.stderr)
+        return 0 if ok else 1
+
+    if args.sources:
+        if args.meta_dir:
+            os.environ["BIB_RAG_PARENT_DIR_OVERRIDE"] = args.meta_dir
+        res = export_answers_bib(args.sources, args.out, mailto=args.mailto,
+                                 offline=args.offline)
+        print(json.dumps(res, ensure_ascii=False))
+        return 0 if res["written"] else 1
+
+    ap.error("pass --dois or --sources")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -335,6 +335,11 @@ def test_identifier_normalization():
             == "10.1016/j.ydbio.2021.01.002")
     assert (normalize_doi("doi:10.1016/j.ydbio.2021.01.002v2")
             == "10.1016/j.ydbio.2021.01.002")
+    # Oxford-style DOIs legitimately end in "v<digits>" — NOT a version suffix
+    assert normalize_doi("10.1093/nar/gkv370") == "10.1093/nar/gkv370"
+    assert normalize_doi("10.1093/cvr/cvr154") == "10.1093/cvr/cvr154"
+    # digit-preceded version markers still stripped
+    assert normalize_doi("10.1016/j.ydbio.2021.01.002.v2") == "10.1016/j.ydbio.2021.01.002"
     assert normalize_doi("not a doi") is None
     assert normalize_arxiv("arXiv:2103.12345v2") == "2103.12345"
     assert normalize_pmid("PMID: 34526773") == "34526773"
@@ -526,6 +531,216 @@ def test_enforce_answer_side_hygiene_end_to_end():
     # double spaces from removals are collapsed
     assert "  " not in out.split("\n\n")[0]
     print("  ✓ enforce_answer_side_hygiene end-to-end: strip + flag + Sources intact")
+
+
+# ---------------------------------------------------------------------------
+# P2a: bibtex_export (offline paths only — no network in tests)
+# ---------------------------------------------------------------------------
+
+def test_bibtex_key_generation():
+    from src.bibtex_export import make_bibtex_key
+    k1 = make_bibtex_key("Lupiáñez", "2015", "Disruptions of the basal lamina")
+    assert k1 == "lupianez_2015_disruptions", k1
+    k2 = make_bibtex_key("Lupiañez", "2015", "Disruptions of the basal lamina",
+                         existing={k1})
+    assert k2 == "lupianez_2015_disruptionsa", k2  # collision suffix (seerai rule)
+    # gene names with digits stay whole
+    k3 = make_bibtex_key("Parkers", "2021", "Ephb1 drives axon repulsion")
+    assert k3 == "parkers_2021_ephb1", k3
+    print("  ✓ bibtex key: diacritic fold + collision suffix + digit-words")
+
+
+def test_bibtex_from_meta():
+    from src.bibtex_export import bibtex_from_meta, bibtex_fields
+    e = bibtex_from_meta({
+        "title": "Ephb1 drives axon repulsion", "year": "2021",
+        "authors": "Paulson AF; Fang X", "journal": "Dev Cell",
+        "doi": "10.1016/j.ydbio.2021.01.002",
+        "source": "Parkers_2021_ephrin_axon_guidance.md"})
+    assert e and "@article{parkers_2021_ephb1," in e
+    f = bibtex_fields(e)
+    assert f["author"] == "Paulson, AF and Fang, X"       # PubMed → BibTeX authors
+    assert f["journal"] == "Dev Cell" and f["year"] == "2021"
+    assert f["doi"] == "10.1016/j.ydbio.2021.01.002"
+    # every field except the last ends with a comma (valid BibTeX)
+    body_lines = [l for l in e.splitlines() if "=" in l]
+    for l in body_lines[:-1]:
+        assert l.rstrip().endswith(","), l
+    assert not body_lines[-1].rstrip().endswith(",")
+    # no title → None
+    assert bibtex_from_meta({"year": "2021"}) is None
+    print("  ✓ bibtex_from_meta: PubMed authors converted, valid commas, no-title None")
+
+
+def test_bibtex_fields_brace_balanced():
+    from src.bibtex_export import bibtex_fields
+    f = bibtex_fields('@a{x, title = {The {Eph} receptor {T}}, year = {2020}}')
+    assert f["title"] == "The {Eph} receptor {T}", f   # nested braces preserved
+    print("  ✓ bibtex_fields handles nested braces")
+
+
+def test_bibtex_fill_missing_fields():
+    from src.bibtex_export import _fill_missing_fields, bibtex_fields
+    bib = "@article{x2020,\n  title = {T},\n  year = {2020}\n}"
+    f = bibtex_fields(_fill_missing_fields(bib, {"author": "Last, First", "journal": "J Bio"}))
+    assert f.get("author") == "Last, First" and f.get("journal") == "J Bio"
+    assert f.get("title") == "T" and f.get("year") == "2020"  # existing untouched
+    print("  ✓ missing fields filled from meta, existing preserved")
+
+
+def test_bibtex_key_rewrite():
+    from src.bibtex_export import _rewrite_key
+    rw = _rewrite_key("@article{CrossrefOriginal, title = {X}, year = {2020}}", "neal_2021_ets")
+    assert "@article{neal_2021_ets," in rw
+    print("  ✓ Crossref key rewritten to canonical form")
+
+
+def test_bibtex_author_lastname():
+    from src.bibtex_export import author_lastname
+    assert author_lastname(author_lead="Parkers, J.") == "Parkers"
+    assert author_lastname(author_lead="Parker Van Der Berg") == "Berg"
+    assert author_lastname(meta={"source": "Chen_2019_ephrin.md"}) == "Chen"
+    print("  ✓ author_lastname: Crossref style + filename fallback")
+
+
+def test_bibtex_load_paper_meta_dual_paths(tmpdir):
+    """Accepts both source filename and store filename; PMID-style stores too."""
+    from src.bibtex_export import load_paper_meta
+    store = str(tmpdir)
+    with open(os.path.join(store, "10068468_md.json"), "w") as f:
+        json.dump([{"parent_id": "10068468.md#full_text#abc", "source": "10068468.md",
+                    "section": "full_text", "content": "x", "word_count": 1,
+                    "char_count": 1,
+                    "meta": {"title": "A Xenopus paper", "authors": "Paulson AF",
+                             "year": "1999", "journal": "", "doi": "10.1006/dbio.1998.9158"}}], f)
+    m1 = load_paper_meta(store, "10068468.md")
+    m2 = load_paper_meta(store, "10068468_md.json")
+    assert m1["doi"] == m2["doi"] == "10.1006/dbio.1998.9158", (m1, m2)
+    assert m1["year"] == "1999"
+    print("  ✓ load_paper_meta resolves both filename conventions")
+
+
+def test_bibtex_export_offline_batch(tmpdir):
+    from src.bibtex_export import export_answers_bib
+    store = str(tmpdir)
+    with open(os.path.join(store, "fake_paper_md.json"), "w") as f:
+        json.dump([{"parent_id": "fake_paper.md#results#abc", "source": "fake_paper.md",
+                    "section": "results", "content": "x", "word_count": 1, "char_count": 10,
+                    "meta": {"title": "Ephb1 drives axon repulsion",
+                             "authors": "Parkers J; Chen L", "year": "2021",
+                             "journal": "Dev Cell", "doi": "10.1016/j.ydbio.2021.01.002"}}], f)
+    out = os.path.join(str(tmpdir), "refs.bib")
+    res = export_answers_bib(["fake_paper.md"], out, offline=True, store_dir=store)
+    assert res["written"] == 1 and res["skipped"] == 0, res
+    text = open(out).read()
+    assert "@article{fake_2021_ephb1," in text and "author = {Parkers, J and Chen, L}" in text
+    # missing paper → skipped, not crash
+    res2 = export_answers_bib(["missing_paper.md"], os.path.join(str(tmpdir), "r2.bib"),
+                              offline=True, store_dir=store)
+    assert res2["written"] == 0 and res2["skipped"] == 1
+    print("  ✓ offline batch export: written + skipped paths")
+
+
+# ---------------------------------------------------------------------------
+# P2b: retraction_watch (offline — temp snapshot CSV, never the live one)
+# ---------------------------------------------------------------------------
+
+_RETRACTION_CSV = (
+    "Record ID,Title,Journal,RetractionDate,RetractionDOI,"
+    "OriginalPaperDOI,RetractionNature,Reason\n"
+    "1,Real retraction,Cardiovasc Res,3/19/2012,10.1093/cvr/cvs087,"
+    "10.1093/cvr/cvr154,Retraction,Unreliable Data\n"
+    "2,Arabidopsis ATX1,Plant J,12/15/2015,10.1093/nar/gkv1489,"
+    "10.1093/nar/gkm464,Correction,Duplication of/in Image\n"
+)
+
+# The false-positive pair that motivated the identifiers.py fix:
+# 10.1093/nar/gkv370 (Oxford NAR, in the library) vs gkv1489 (snapshot row) —
+# the old `v\d+$` strip collided both to bare "10.1093/nar/gk".
+
+
+def test_retraction_load_and_is_retracted(tmpdir):
+    from src.retraction_watch import load_retractions, is_retracted
+    snap = os.path.join(str(tmpdir), "rw.csv")
+    with open(snap, "w") as f:
+        f.write(_RETRACTION_CSV)
+    retr = load_retractions(snapshot=snap, cache_days=-1)
+    assert "10.1093/cvr/cvr154" in retr
+    assert is_retracted("https://doi.org/10.1093/CVR/CVR154", retr)  # case+prefix
+    assert not is_retracted("10.1093/nar/gkv370", retr)   # Oxford DOI intact
+    assert not is_retracted("10.1093/nar/gk", retr)       # no bare-prefix hit
+    assert is_retracted("10.1093/nar/gkm464", retr)
+    print("  ✓ retraction load + is_retracted: case/prefix tolerant, Oxford DOIs intact")
+
+
+def test_retraction_check_sources(tmpdir):
+    from src.retraction_watch import check_sources
+    store = str(tmpdir)
+    with open(os.path.join(store, "retracted_md.json"), "w") as f:
+        json.dump([{"parent_id": "retracted.md#full#x", "source": "retracted.md",
+                    "section": "full_text", "content": "x", "word_count": 1,
+                    "char_count": 1,
+                    "meta": {"title": "Cardiovasc retraction case",
+                             "doi": "10.1093/cvr/cvr154"}}], f)
+    with open(os.path.join(store, "clean_md.json"), "w") as f:
+        json.dump([{"parent_id": "clean.md#full#x", "source": "clean.md",
+                    "section": "full_text", "content": "x", "word_count": 1,
+                    "char_count": 1,
+                    "meta": {"title": "Clean Oxford paper",
+                             "doi": "10.1093/nar/gkv370"}}], f)
+    # empty snapshot set → no hits
+    hits = check_sources(store_dir=store, retractions=set())
+    assert hits == {}, hits
+    # retracted DOI flagged; clean Oxford DOI untouched by the normalize fix
+    hits = check_sources(store_dir=store, retractions={"10.1093/cvr/cvr154"})
+    assert set(hits) == {"Cardiovasc retraction case"}, hits
+    assert hits["Cardiovasc retraction case"]["doi"] == "10.1093/cvr/cvr154"
+    print("  ✓ check_sources: retracted flagged, Oxford DOI untouched")
+
+
+def test_retraction_doctor_smoke(tmpdir):
+    """check_retractions wiring: missing-snapshot INFO, OK path, kill-switch."""
+    import importlib.util
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "doctor", os.path.join(repo, "scripts", "doctor.py"))
+    assert spec is not None and spec.loader is not None
+    doctor = importlib.util.module_from_spec(spec)
+    _saved_doctor = sys.modules.get("doctor")
+    sys.modules["doctor"] = doctor  # required before exec_module (@dataclass lookup)
+    try:
+        spec.loader.exec_module(doctor)
+        cfg = {"parent_store_dir": str(tmpdir), "data_dir": str(tmpdir)}
+        # kill-switch (checked before any filesystem access)
+        os.environ["RETRACTION_CHECK"] = "0"
+        try:
+            r = doctor.check_retractions(cfg)
+            assert r[0].status == doctor.INFO and "RETRACTION_CHECK" in r[0].message
+        finally:
+            os.environ["RETRACTION_CHECK"] = "1"
+        # force snapshot_path so the test never depends on the live snapshot
+        sys.path.insert(0, os.path.join(repo, "src"))
+        import retraction_watch as rw  # bare module — the one doctor's import binds
+        orig = rw.snapshot_path
+        try:
+            rw.snapshot_path = lambda: os.path.join(str(tmpdir), "absent.csv")
+            r = doctor.check_retractions(cfg)
+            assert r[0].status == doctor.INFO and "--update" in r[0].message, r
+            # empty store + snapshot present, nothing matches → OK
+            snap = os.path.join(str(tmpdir), "rw.csv")
+            with open(snap, "w") as f:
+                f.write(_RETRACTION_CSV)
+            rw.snapshot_path = lambda: snap
+            r = doctor.check_retractions(cfg)
+            assert r[0].status == doctor.OK and "0 retracted" in r[0].message, r
+        finally:
+            rw.snapshot_path = orig
+    finally:
+        if _saved_doctor is not None:
+            sys.modules["doctor"] = _saved_doctor
+        else:
+            sys.modules.pop("doctor", None)
+    print("  ✓ doctor check_retractions: missing-snapshot INFO + OK + kill-switch")
 
 
 # ---------------------------------------------------------------------------

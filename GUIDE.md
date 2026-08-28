@@ -139,7 +139,9 @@ Zotero probe):
 ```
 
 Checks: chroma↔FTS generation drift, parent_store completeness, citation-graph
-endpoint closure, DOI quality, SQLite integrity, config sanity. Statuses
+endpoint closure, DOI quality, retracted-paper scan (Retraction Watch snapshot
+in `data/retraction_watch.csv`; first run reports INFO with the `--update`
+remedy), SQLite integrity, config sanity. Statuses
 are OK / INFO / WARN / FAIL; every WARN/FAIL ships a copy-pasteable remedy. The
 exit code counts FAILs only (0 when clean), so it is safe to wire into CI.
 
