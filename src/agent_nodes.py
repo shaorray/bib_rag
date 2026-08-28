@@ -431,6 +431,28 @@ def collect_answer(state: AgentState):
                 guard_note = f"[citation_guard] removed {report['dropped']} unverifiable source line(s)"
         except Exception as e:  # guard must never break answering
             guard_note = f"[citation_guard] skipped ({type(e).__name__})"
+        # Answer-side hygiene (paper-qa / CogDoc mechanism): strip inline
+        # (Author, year) parentheticals that match no retrieved parent and
+        # flag malformed citation tokens. Zero LLM; separate kill-switch.
+        try:
+            from .citation_guard import (
+                enforce_answer_side_hygiene, parent_ids_from_keys,
+                parent_ids_from_tool_messages)
+            known = parent_ids_from_keys(state.get("retrieval_keys", set()))
+            known |= parent_ids_from_tool_messages(state.get("messages") or [])
+            answer, side_report = enforce_answer_side_hygiene(answer, known)
+            n_stripped = len(side_report.get("stripped_inline", []))
+            n_malformed = len(side_report.get("malformed_tokens", []))
+            if n_stripped or n_malformed:
+                parts = []
+                if n_stripped:
+                    parts.append(f"{n_stripped} inline citation(s)")
+                if n_malformed:
+                    parts.append(f"{n_malformed} malformed token(s)")
+                note = f"[citation_guard] answer-side: removed " + " + flagged ".join(parts)
+                guard_note = f"{guard_note}; {note}" if guard_note else note
+        except Exception:
+            pass  # answer-side hygiene is best-effort; never break answering
 
     return {
         "final_answer": answer,

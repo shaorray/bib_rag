@@ -98,23 +98,79 @@ _SECTION_JUNK = re.compile(
     re.I,
 )
 
+# ---------------------------------------------------------------------------
+# Answer-side citation hygiene (P1a: borrowed from paper-qa + CogDoc)
+# ---------------------------------------------------------------------------
+# Env kill-switches (same pattern as CITATION_GUARD / BROADEN_RETRY):
+#   CITATION_GUARD_ANSWER_SIDE=0  disables inline hallucinated-citation stripping
+#   CITATION_GUARD_STRICT=0       disables malformed-token annotations
+
+# Trailing figure/table/panel references models append to sentences but that
+# are not part of the claim ("... (Fig. 2a)", "... (see Table S3)").
+# Borrowed from seerai grounding.ts TRAILING_REF.
+_TRAILING_REF_RE = re.compile(
+    r"\s*\((?:see\s+)?(?:fig(?:ure)?|figs?|table|tbl|panel|suppl[a-z]*|"
+    r"appendix|appx|eq(?:uation)?|ref)\.?\s*[^)]*\)\s*$", re.I)
+
+# Malformed evidence-token shapes observed in the wild (CogDoc
+# _SUSPICIOUS_EVIDENCE_TOKEN_RE + page-citation mixing). bib_rag answers use
+# [n] / [PMID:x] / (Author, year) styles; a bracket token that LOOKS like an
+# evidence id but matches none of them is a hallucinated/degenerate citation.
+_MALFORMED_EVIDENCE_RE = re.compile(
+    r"(?:(?:^|[^\w])(?:e(?:[\W_]*i[\W_*d]*)?|evidence(?:[\W_]*i[\W_*d]*))"
+    r"[\W_]*\d)|(?:^|[^\w])E\d{1,2}(?::|\b)", re.I)
+
+# Inline citation shapes that may appear in the answer body:
+#   (Smith et al., 2020) (Smith, 2020) ([12]) (see Smith et al. 2020)
+#   [12] [12,13] [4-7] [PMID:34526773] [doi:10.1016/...]
+_INLINE_AUTHOR_YEAR_RE = re.compile(
+    r"\((?:see\s+)?[A-Z][\w'\-]+(?:\s+et\s+al\.)?(?:\s*(?:,|&|and)\s*"
+    r"[A-Z][\w'\-]+)*,?\s*\d{4}[a-z]?\)")
+_INLINE_BRACKET_RE = re.compile(r"\[\d+(?:[,;\-\s]+\d+)*\]|\[PMID:\s*\d+\]", re.I)
+
+
+def _normalize_strict(text: str) -> str:
+    """NFKC + full variant folding for robust matching (seerai grounding).
+
+    Folds: dash variants → '-', exotic spaces → ' ', curly/guillemet/low
+    quotes → ASCII, ligatures & full-width forms via NFKC, then collapses
+    whitespace. Used by the substring tier and malformed-token scanning.
+    """
+    import unicodedata
+    if not text:
+        return ""
+    t = unicodedata.normalize("NFKC", text)
+    t = re.sub(r"[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]", "-", t)
+    t = re.sub(r"[\u00a0\u2000-\u200b\u202f\u205f\u3000]", " ", t)
+    t = re.sub(r"[\u2018\u2019\u201a\u201b\u2032]", "'", t)
+    t = re.sub(r"[\u201c\u201d\u201e\u201f\u2033]", '"', t)
+    t = re.sub(r"\s+", " ", t)
+    return t.strip()
+
+
+def strip_trailing_refs(text: str) -> str:
+    """Remove trailing '(Fig. 2a)'-style references (idempotent loop)."""
+    cleaned = (text or "").strip()
+    prev = None
+    while cleaned and cleaned != prev:
+        prev = cleaned
+        cleaned = _TRAILING_REF_RE.sub("", cleaned).strip()
+    return cleaned
+
 
 # ---------------------------------------------------------------------------
 # Normalization helpers
 # ---------------------------------------------------------------------------
 
 def normalize(text: str) -> str:
-    """Aggressive normalization for substring checks: lowercase, unify quotes/
-    dashes/whitespace, strip citation markers like [12] or (Smith et al., 2020)."""
+    """Aggressive normalization for substring checks: NFKC fold (ligatures,
+    full-width), lowercase, unify quotes/dashes/exotic spaces/whitespace,
+    strip citation markers like [12] or (Smith et al., 2020)."""
     if not text:
         return ""
-    t = text.lower()
+    t = _normalize_strict(text).lower()
     t = re.sub(r"\[\d+(?:[,\-\s]+\d+)*\]", " ", t)          # [1], [2,3], [4-7]
     t = re.sub(r"\((?:[a-z][a-z'\-]+(?:\s+et\s+al\.)?)(?:,?\s*\d{4})?\)", " ", t)
-    t = t.replace("’", "'").replace("‘", "'")
-    t = t.replace("“", '"').replace("”", '"')
-    t = re.sub(r"[–—−]", "-", t)
-    t = re.sub(r"[\s]+", " ", t)
     return t.strip()
 
 
@@ -380,6 +436,160 @@ def claim_supported_lexically(claim: str, chunk_text: str,
     rare_hits = sum(1 for t in matched if len(t) >= 8)
     supported = score >= threshold and (rare_hits >= rare_required or len(c_toks) < 12)
     return supported, score
+
+
+# ---------------------------------------------------------------------------
+# Answer-side inline citation hygiene (P1a: paper-qa hallucination stripping +
+# CogDoc malformed-token defense, adapted to bib_rag's answer format)
+# ---------------------------------------------------------------------------
+
+def scan_malformed_citation_tokens(body: str) -> List[str]:
+    """Find bracket tokens in the body that LOOK like citation machinery but
+    match no known citation shape ([n], [PMID:x], (Author, year)) — e.g.
+    'e id:5', 'evidence id123', 'E1:P3' (page-number mixing), '[e12]'.
+
+    CogDoc's defense: these are degenerate citations the model invented when
+    the citation format was not followed; left in place they read as garbage
+    or mislead readers. Returns the list of offending token strings (raw).
+    """
+    if os.environ.get("CITATION_GUARD_STRICT", "1") == "0":
+        return []
+    out: List[str] = []
+    # bracket tokens (terminated within the same line), NFKC-normalized scan
+    for m in re.finditer(r"\[[^\]\n]{1,40}\]", body):
+        raw = m.group(0)
+        t = _normalize_strict(raw)
+        inner = t[1:-1].strip()
+        if not inner:
+            continue
+        # known-good shapes → skip
+        if _INLINE_BRACKET_RE.fullmatch(t):
+            continue
+        if re.fullmatch(r"\[[^\]]*\d{4}[a-z]?\]", t) and re.search(r"[A-Za-z]", inner):
+            continue  # [Smith 2020]-style
+        if _MALFORMED_EVIDENCE_RE.search(inner):
+            out.append(raw)
+    return out
+
+
+def strip_inline_hallucinated_citations(body: str,
+                                        known_parent_ids: Set[str],
+                                        parent_meta: Dict[str, dict]) -> Tuple[str, List[str]]:
+    """Strip inline author-year citations from the body that reference NO
+    whitelisted parent (paper-qa: 'strip out any leftover hallucinated
+    citations').
+
+    bib_rag answers cite in the body with (Author et al., year) parentheticals.
+    A parenthetical is hallucinated when no retrieved parent's title/meta
+    shares its leading author surname + year. Deterministic, zero-LLM:
+    builds a (surname, year) index from parent_meta + parent ids and drops
+    body parentheticals that match none of them. Bare number brackets [12]
+    are left alone (they refer to Sources numbering, resolved later).
+
+    Returns (cleaned_body, removed_parentheticals).
+    """
+    if os.environ.get("CITATION_GUARD_ANSWER_SIDE", "1") == "0":
+        return body, []
+    # Build the (surname_lower, year) allowlist from known parents
+    allowed: Set[Tuple[str, str]] = set()
+    for pid in known_parent_ids:
+        src = pid.split("#", 1)[0]
+        stem = os.path.splitext(os.path.basename(src))[0]
+        # store filenames: '<Lastname>_<Year>_...' (year is its own segment);
+        # require the year to be a full segment so 'Bates4_2011' style ids
+        # and years embedded mid-word don't false-positive.
+        m = re.match(r"^([A-Za-z][\w'\-]*?)[ _\-]+((?:19|20)\d{2})(?=[ _\-]|\b)",
+                     stem)
+        if m:
+            allowed.add((m.group(1).lower(), m.group(2)))
+        else:
+            # year-only fallback: bare 4-digit year segment in the name
+            ym = re.search(r"\b((?:19|20)\d{2})\b", stem)
+            if ym:
+                allowed.add(("*", ym.group(1)))
+    for meta in parent_meta.values():
+        title = meta.get("title", "") or ""
+        # titles rarely carry author+year; parent ids are the primary source.
+        ym = re.search(r"\b((?:19|20)\d{2})\b", title)
+        if ym:
+            # allow year match with any surname only if we have nothing better
+            allowed.add(("*", ym.group(1)))
+
+    if not allowed:
+        return body, []
+
+    removed: List[str] = []
+    out = body
+    for m in _INLINE_AUTHOR_YEAR_RE.finditer(body):
+        tok = m.group(0)
+        t = _normalize_strict(tok)
+        inner = t.strip("()")
+        years = re.findall(r"\b((?:19|20)\d{2})\b", inner)
+        if not years:
+            continue
+        # leading surname(s)
+        lead = re.match(r"\(?see\s+([A-Za-z])", inner)
+        names = re.findall(r"[A-Za-z][\w'\-]*", inner.replace("et al", " ").replace("see", " "))
+        surnames = [w.lower() for w in names if len(w) > 2]
+        ok = False
+        for y in years:
+            for s in surnames or ["*"]:
+                if (s, y) in allowed:
+                    ok = True
+                    break
+            if ok:
+                break
+        if not ok:
+            removed.append(tok)
+    # remove unique offenders (avoid double-removing shared substrings)
+    for tok in dict.fromkeys(removed):
+        out = out.replace(tok + " ", " ").replace(tok, "")
+    # collapse artifacts from removals (double spaces, space before punctuation,
+    # 'and also claims'-style gaps where a citation used to be)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\s+([,.;:])", r"\1", out)
+    out = re.sub(r"\s+—\s+", " — ", out)
+    return out, removed
+
+
+def enforce_answer_side_hygiene(answer: str,
+                                known_parent_ids: Set[str],
+                                parent_meta: Optional[Dict[str, dict]] = None,
+                                ) -> Tuple[str, Dict]:
+    """Answer-side companion to enforce_citation_guard: cleans the BODY
+    (inline citations), while enforce_citation_guard owns the Sources section.
+
+    Returns (cleaned_answer, report) with report keys:
+      stripped_inline:     hallucinated (Author, year) parentheticals removed
+      malformed_tokens:    degenerate evidence tokens found (annotated)
+    """
+    if parent_meta is None:
+        parent_meta = load_parent_meta_map(known_parent_ids)
+    report: Dict = {"stripped_inline": [], "malformed_tokens": []}
+    body, source_lines, header = split_answer_sources(answer)
+
+    cleaned_body, removed = strip_inline_hallucinated_citations(
+        body, known_parent_ids, parent_meta)
+    report["stripped_inline"] = removed
+    if removed:
+        # re-attach the (untouched) Sources section
+        if header:
+            src_text = header.rstrip() + "\n" + "\n".join(
+                f"- {l}" for l in source_lines)
+            cleaned_body = cleaned_body.rstrip()
+            answer = cleaned_body + "\n\n" + src_text
+        else:
+            answer = cleaned_body
+        answer += (f"\n\n<!-- citation_guard: {len(removed)} inline "
+                   f"citation(s) in the body matched no retrieved source "
+                   f"and were removed -->")
+    bad = scan_malformed_citation_tokens(answer)
+    if bad:
+        report["malformed_tokens"] = bad
+        answer += ("\n\n<!-- citation_guard: possible malformed citation "
+                   f"token(s): {', '.join(bad[:5])} -->")
+    return answer, report
+
 
 
 # ---------------------------------------------------------------------------

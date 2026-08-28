@@ -429,6 +429,106 @@ def test_broaden_disabled_by_default_env(tmpdir):
 
 
 # ---------------------------------------------------------------------------
+# P1a/P1b: answer-side hygiene + strict normalization (paper-qa/CogDoc/seerai)
+# ---------------------------------------------------------------------------
+
+def test_normalize_strict_variants():
+    """NFKC + dash/space/quote folding (seerai grounding rules)."""
+    from src.citation_guard import _normalize_strict
+    t = _normalize_strict("Ephb1\u2010ephrin‑B1  \u00a0 binding „quotes” and ﬁ ligature")
+    assert "\u2010" not in t and "\u2011" not in t and "\u00a0" not in t
+    assert '"' in t          # low/high double quotes → "
+    assert "fi" in t         # NFKC unfolds the ﬁ ligature
+    t2 = _normalize_strict("it\u2019s a \u2018single\u2019 one")
+    assert "it's" in t2 and "'single'" in t2
+    print("  ✓ _normalize_strict folds dashes/spaces/quotes/ligatures")
+
+
+def test_strip_trailing_refs():
+    from src.citation_guard import strip_trailing_refs
+    assert strip_trailing_refs("Binds ephrin-B1 (see Fig. 2a)") == "Binds ephrin-B1"
+    assert strip_trailing_refs("Boundary cells form (Table S3)") == "Boundary cells form"
+    assert strip_trailing_refs("Levels rise (Fig. 1b) (Fig. 2a)") == "Levels rise"
+    assert strip_trailing_refs("No trailing ref here") == "No trailing ref here"
+    # non-trailing refs are untouched
+    assert strip_trailing_refs("(Fig. 2a) shows levels") == "(Fig. 2a) shows levels"
+    print("  ✓ strip_trailing_refs removes trailing figure/table refs")
+
+
+def test_scan_malformed_citation_tokens():
+    from src.citation_guard import scan_malformed_citation_tokens
+    bad = scan_malformed_citation_tokens(
+        "uses [e id:5] and [evidence id123] and [E1:P3] mixes")
+    assert "[e id:5]" in bad and "[evidence id123]" in bad and "[E1:P3]" in bad, bad
+    # known-good shapes must NOT be flagged
+    good = scan_malformed_citation_tokens(
+        "cites [12], [3,4], [PMID:12345678], [Smith 2020], [Figure 2]")
+    assert good == [], good
+    print(f"  ✓ malformed tokens detected: {bad}")
+
+
+def test_strip_inline_hallucinated_citations():
+    from src.citation_guard import strip_inline_hallucinated_citations
+    known = {"Parkers_2021_ephrin_axon_guidance.md#results#abc",
+             "Chen_2019_ephrin.md#intro#def"}
+    meta = {}
+    body = ("Ephb1 drives repulsion (Parkers et al., 2021) via ephrin-B1 (Chen, 2019) "
+            "and also (Fakester et al., 1999) nonsense (Bogus, 2030).")
+    cleaned, removed = strip_inline_hallucinated_citations(body, known, meta)
+    # whitelisted citations kept
+    assert "(Parkers et al., 2021)" in cleaned and "(Chen, 2019)" in cleaned
+    # hallucinated ones stripped
+    assert "(Fakester et al., 1999)" not in cleaned and "(Bogus, 2030)" not in cleaned
+    assert set(removed) == {"(Fakester et al., 1999)", "(Bogus, 2030)"}, removed
+    # year-mismatch with a known surname is still hallucinated
+    _, removed2 = strip_inline_hallucinated_citations(
+        "Claims (Parkers, 1999) here.", {"Parkers_2021_ephrin_axon_guidance.md#results#abc"}, meta)
+    assert removed2 == ["(Parkers, 1999)"], removed2
+    print(f"  ✓ inline hallucinated citations stripped, whitelisted kept: {removed}")
+
+
+def test_strip_inline_noop_when_no_parents():
+    """Empty whitelist → no-op (never nuke every citation)."""
+    from src.citation_guard import strip_inline_hallucinated_citations
+    body = "All (Nobody, 2001) citations (Who et al., 2002) stay."
+    cleaned, removed = strip_inline_hallucinated_citations(body, set(), {})
+    assert cleaned == body and removed == []
+    print("  ✓ no whitelisted parents → inline stripping disabled (safe no-op)")
+
+
+def test_strip_inline_kill_switch():
+    from src.citation_guard import strip_inline_hallucinated_citations
+    body = "A (Fakester et al., 1999) B."
+    os.environ["CITATION_GUARD_ANSWER_SIDE"] = "0"
+    try:
+        cleaned, removed = strip_inline_hallucinated_citations(body, set(), {"x": {}})
+        assert cleaned == body and removed == []
+    finally:
+        os.environ.pop("CITATION_GUARD_ANSWER_SIDE", None)
+    print("  ✓ CITATION_GUARD_ANSWER_SIDE=0 kill-switch works")
+
+
+def test_enforce_answer_side_hygiene_end_to_end():
+    from src.citation_guard import enforce_answer_side_hygiene
+    known = {"Parkers_2021_ephrin_axon_guidance.md#results#abc"}
+    meta = {"Parkers_2021_ephrin_axon_guidance.md#results#abc":
+            {"title": "Ephb1 drives axon repulsion", "source":
+             "Parkers_2021_ephrin_axon_guidance.md", "section": "results"}}
+    ans = ("Ephb1 drives repulsion (Parkers et al., 2021) and nonsense "
+           "(Fakester et al., 1999) here [e id:5].\n\n---\n**Sources:**\n"
+           "- Parkers_2021_ephrin_axon_guidance.md\n")
+    out, report = enforce_answer_side_hygiene(ans, known, meta)
+    assert "(Fakester et al., 1999)" not in out
+    assert "(Parkers et al., 2021)" in out          # whitelisted → kept
+    assert "**Sources:**" in out and "Parkers_2021_ephrin_axon_guidance.md" in out
+    assert len(report["stripped_inline"]) == 1
+    assert report["malformed_tokens"] == ["[e id:5]"]
+    # double spaces from removals are collapsed
+    assert "  " not in out.split("\n\n")[0]
+    print("  ✓ enforce_answer_side_hygiene end-to-end: strip + flag + Sources intact")
+
+
+# ---------------------------------------------------------------------------
 # fixture
 # ---------------------------------------------------------------------------
 
