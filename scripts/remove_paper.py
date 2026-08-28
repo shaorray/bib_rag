@@ -27,10 +27,10 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from kb_config import get_config  # noqa: E402
 
 import chromadb  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 def find_sources(col, pattern, exact):

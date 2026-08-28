@@ -489,7 +489,7 @@ def main():
     if output:
         write_odt(paragraph, citations, topic, output, llm_result)
     else:
-        default_output = f"/Disk_bot/writing/debate_{topic[:30].replace(' ', '_')}.odt"
+        default_output = str(Path(_CFG["outputs_dir"]) / f"debate_{topic[:30].replace(' ', '_')}.odt")
         write_odt(paragraph, citations, topic, default_output, llm_result)
 
 

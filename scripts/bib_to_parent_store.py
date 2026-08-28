@@ -18,9 +18,11 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, '/Disk_bot/RAG/bib_rag/src')
-from kb_config import get_config
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+import os
+
+from kb_config import get_config
 from bib_utils import (
     extract_year_from_content, filename_to_key, normalize,
     normalize_doi, parse_bib_entries, strip_author_year_prefix,
@@ -28,7 +30,10 @@ from bib_utils import (
 
 _CFG = get_config()
 
-BIB_PATH = Path('/Disk_bot/My Library.bib')
+BIB_PATH = Path(os.environ.get("BIB_RAG_BIB_PATH", "My Library.bib"))
+if not BIB_PATH.exists():
+    print(f"[warn] BibTeX file not found: {BIB_PATH} — set BIB_RAG_BIB_PATH env "
+          f"or pass --bib <path> (needed only for metadata-fill workflows)")
 PARENT_STORE = Path(_CFG["parent_store_dir"])
 BACKUP_DIR = Path(_CFG["data_dir"]) / "parent_store_backup_doi"
 MATCH_LOG = Path(_CFG["data_dir"]) / "bib_to_parent_store_log.json"

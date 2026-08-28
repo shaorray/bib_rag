@@ -32,7 +32,7 @@ def _load_parent_with_fallback(parent_id: str):
     Try parent_store/ first, then parent_store_disabled/.  Returns the parent
     dict (with 'meta' inside) or None.  This makes 57 disabled papers (which
     ChromaDB still references but parent_store no longer has) recoverable via
-    fallback.  See /home/rui/.openclaw/workspace/memory/2026-06-19.md S20+.
+    fallback (added 2026-06-19; recovers papers disabled from the primary store).
     """
     if not parent_id:
         return None

@@ -7,7 +7,7 @@ genuine metadata (DOI, title, authors, year, journal, PMID/PMCID) into a
 concrete `suggested_fix` payload. Dry-run by default; --apply writes back.
 
 Ground-truth sources (priority order):
-  1. /Disk_bot/My Library.bib  — canonical Zotero export (title, DOI, authors, year, journal, key)
+  1. My Library.bib (BIB_RAG_BIB_PATH env / --bib flag) — canonical Zotero export (title, DOI, authors, year, journal, key)
   2. Zotero local API (:23119) — authoritative for this user's library (optional, graceful)
   3. Crossref                  — DOI verification + title/author/year search to find genuine DOI
   4. PubMed E-utilities        — PMID/PMCID backfill + biomedical corroboration
@@ -51,7 +51,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import sys
 
-sys.path.insert(0, "/Disk_bot/RAG/bib_rag/src")
+import os
+
 from kb_config import get_config
 
 _CFG = get_config()
@@ -61,7 +62,7 @@ _CFG = get_config()
 # ---------------------------------------------------------------------------
 
 DEFAULT_PARENT_DIR = Path(_CFG["parent_store_dir"])
-DEFAULT_BIB_PATH = Path("/Disk_bot/My Library.bib")
+DEFAULT_BIB_PATH = Path(os.environ.get("BIB_RAG_BIB_PATH", "My Library.bib"))
 DEFAULT_ZOTERO_URL = "http://localhost:23119"
 DEFAULT_CROSSREF_MAILTO = "bib-rag@example.com"
 DEFAULT_DATA_DIR = Path(_CFG["data_dir"])
@@ -96,6 +97,7 @@ from bib_utils import (
 )
 
 import zotero_access  # noqa: E402  (scripts/ sibling; MCP-first Zotero access)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 # ---------------------------------------------------------------------------

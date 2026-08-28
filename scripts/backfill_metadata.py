@@ -28,8 +28,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from kb_config import get_config  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 _CFG = get_config()
 

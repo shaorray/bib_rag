@@ -14,12 +14,13 @@ Usage:
     # Fully non-interactive:
     /usr/bin/python3.10 -B scripts/setup_library.py \
         --name neuro_rag \
-        --root /Disk_bot/RAG/neuro_rag \
+        --root /path/to/RAG_home/neuro_rag \
         --collection neuro_papers \
         --domain "neuroscience / axon guidance" \
         --wrapper
 
-Requires: write access to /Disk_bot/RAG and the bib_rag repo. Never touches
+Requires: write access to the RAG home (default: parent of this repo) and the
+bib_rag repo. Never touches
 existing libraries — refuses if the target root already exists (use --force
 to scaffold into an existing directory that lacks the standard subdirs).
 """
@@ -43,7 +44,7 @@ set -euo pipefail
 export BIB_RAG_KB_NAME="${{BIB_RAG_KB_NAME:-{name}}}"
 export BIB_RAG_COLLECTION="${{BIB_RAG_COLLECTION:-{collection}}}"
 export BIB_RAG_ROOT="${{BIB_RAG_ROOT:-{root}}}"
-export PYTHONPATH="/home/rui/.local/lib/python3.10/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
+export PYTHONPATH="${{BIB_RAG_SITE_PACKAGES:-$HOME/.local/lib/python3.10/site-packages}}${{PYTHONPATH:+:$PYTHONPATH}}"
 
 CODEBASE="{code_root}"
 SCRIPT="$1"; shift
@@ -154,7 +155,7 @@ def write_wrapper(name: str, root: str, collection: str, domain: str = "user lib
 def main():
     ap = argparse.ArgumentParser(description="Scaffold a new RAG library + register it")
     ap.add_argument("--name", help="Library name, e.g. neuro_rag (must end in _rag)")
-    ap.add_argument("--root", help="Data root, default /Disk_bot/RAG/<name>")
+    ap.add_argument("--root", help="Data root (default: <RAG home>/<name>, where the RAG home defaults to the parent of this repo; override BIB_RAG_HOME)")
     ap.add_argument("--collection", help="Chroma collection name, default <name>_papers")
     ap.add_argument("--domain", help="Short domain description, e.g. 'neuroscience'")
     ap.add_argument("--wrapper", choices=["yes", "no", "ask"], default="ask",
@@ -165,7 +166,7 @@ def main():
 
     def ask(prompt, default):
         if args.no_interactive:
-            return None
+            return default  # non-interactive mode = accept defaults
         v = input(f"{prompt} [{default}]: ").strip()
         return v or default
 
@@ -173,14 +174,11 @@ def main():
     if not name or not re.fullmatch(r"[a-z][a-z0-9_]*_rag", name):
         sys.exit("ERROR: --name must be lowercase snake_case ending in '_rag' "
                  "(e.g. neuro_rag). This keeps wrappers and registry keys consistent.")
-    root = args.root or ask("Data root", f"/Disk_bot/RAG/{name}")
+    rag_home = os.environ.get("BIB_RAG_HOME", str(Path(__file__).resolve().parent.parent.parent))
+    root = args.root or ask("Data root", str(Path(rag_home) / name))
     collection = args.collection or ask("Collection name", f"{name[:-4]}_papers")
     domain = args.domain or ask("Domain (one line)", "TBD")
-    if not name or not root or not collection or not domain:
-        sys.exit("ERROR: --name, --root, --collection and --domain are all required "
-                 "(use --no-interactive with all flags, or run interactively).")
-    if args.no_interactive and None in (root, collection, domain):
-        sys.exit("ERROR: --no-interactive requires --name --root --collection --domain")
+
 
     root_path = Path(root)
     print(f"\n=== Scaffolding library '{name}' ===")

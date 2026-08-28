@@ -43,8 +43,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from kb_config import get_config  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 _CFG = get_config()
 OUT_DIR = _CFG["outputs_dir"]
@@ -192,9 +192,11 @@ def main():
     # LLM client
     if args.backend == "local":
         LOCAL_URL = "http://localhost:5015/v1"
-        LOCAL_MODEL = os.environ.get(
-            "CLASSIFY_MODEL",
-            "/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf")
+        LOCAL_MODEL = os.environ.get("CLASSIFY_MODEL", "")
+        if not LOCAL_MODEL:
+            sys.exit("ERROR: --backend local needs CLASSIFY_MODEL set to a local "
+                     "GGUF path (or use --backend cloud). Example: "
+                     "CLASSIFY_MODEL=/path/to/model.gguf")
         llm_url, llm_model = LOCAL_URL, LOCAL_MODEL
     else:
         llm_url, llm_model = "http://localhost:11434/v1", "glm-5.2:cloud"

@@ -3,9 +3,12 @@
 kb_config.py — Shared configuration for the RAG toolkit (code) + knowledge-base
 stores (data). Architecture (2026-08-27):
 
-    /Disk_bot/RAG/bib_rag/     CODE  — src/, scripts/, docs/ (this repo, ~1MB)
-    /Disk_bot/RAG/eph_rag/     DATA  — Eph-ephrin library (chroma_db, parent_store, data, outputs)
-    /Disk_bot/RAG/geo_rag/     DATA  — geology/renewables library
+    <RAG home>/bib_rag/        CODE  — src/, scripts/, docs/ (this repo)
+    <RAG home>/<name>_rag/     DATA  — one folder per domain library
+
+The RAG home defaults to the parent directory of this repo (so sibling
+library folders are found wherever the toolkit is cloned) and can be moved
+with BIB_RAG_HOME.
 
 A "library" = a data directory that is self-describing (its own chroma_db_new/,
 parent_store/, data/, outputs/, CONTEXT.md, LIBRARY.md). The tool code is
@@ -21,27 +24,38 @@ Env vars:
   BIB_RAG_KB_NAME     eph_rag (default) | geo_rag | ...
   BIB_RAG_ROOT        explicit library/data root (overrides registry)
   BIB_RAG_COLLECTION  collection name override (default comes from registry)
-  BIB_RAG_CODE_ROOT   override the tool-code root (default: /Disk_bot/RAG/bib_rag)
+  BIB_RAG_CODE_ROOT   override the tool-code root (default: parent of src/)
 """
 
 import os
 from pathlib import Path
 
 # ─── Fixed tool-code root ───────────────────────────────────────────────────
-_CODE_ROOT = os.environ.get("BIB_RAG_CODE_ROOT", "/Disk_bot/RAG/bib_rag")
+# Default code root = parent of this src/ directory (portable: wherever the
+# repo is cloned, the toolkit follows). Override with BIB_RAG_CODE_ROOT.
+_CODE_ROOT = os.environ.get(
+    "BIB_RAG_CODE_ROOT",
+    str(Path(__file__).resolve().parent.parent))
 
 # ─── Named library registry ────────────────────────────────────────────────
 # Each entry: data root + canonical collection name. Adding a library = adding
-# one entry here (or setting BIB_RAG_ROOT/BIB_RAG_COLLECTION directly).
+# one entry here (or setting BIB_RAG_ROOT/BIB_RAG_COLLECTION directly, or
+# running scripts/setup_library.py which patches this dict).
+#
+# Root defaults derive from BIB_RAG_HOME (default: the directory containing
+# this repo) so a cloned toolkit finds its sibling libraries anywhere:
+#   <BIB_RAG_HOME>/<name>/  e.g. <BIB_RAG_HOME>/eph_rag/
+_RAG_HOME = Path(os.environ.get("BIB_RAG_HOME", Path(__file__).resolve().parent.parent.parent))
+
 _KB_REGISTRY = {
     "eph_rag": {
-        "root": "/Disk_bot/RAG/eph_rag",
+        "root": str(_RAG_HOME / "eph_rag"),
         "collection": "bib_rag_papers",   # historical name, kept for the existing 470K chunks
     },
     "geo_rag": {
-        "root": "/Disk_bot/RAG/geo_rag",
-        "collection": "geo_rag_papers",
-    },
+        "root": str(_RAG_HOME / "geo_rag"),
+        "collection": "geo_rag_papers"
+    }
 }
 
 # Legacy aliases (deprecated, print a warning once)

@@ -37,7 +37,7 @@ Why this exists (lessons from the old bib_rag_writer.py):
 Borrowed from: https://github.com/mattpocock/skills (skills/productivity/grill-me/SKILL.md)
 """
 
-import sys, os, re, json, argparse, requests
+import sys, os, re, json, argparse, requests, tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -51,7 +51,7 @@ from kb_config import get_config
 _CFG = get_config()
 BIB_RAG_ROOT = Path(_CFG["data_root"])
 CONTEXT_PATH = BIB_RAG_ROOT / "CONTEXT.md"
-SPEC_DIR = Path("/tmp/bib_rag_grill_specs")
+SPEC_DIR = Path(os.environ.get("BIB_RAG_SPEC_DIR", tempfile.gettempdir())) / "bib_rag_grill_specs"
 SPEC_DIR.mkdir(exist_ok=True)
 
 # === API endpoints (shared with kb_config) ===
@@ -408,7 +408,7 @@ def main():
     parser.add_argument("--auto", action="store_true", help="Auto-fill the spec via LLM (skip interactive grill)")
     parser.add_argument("--spec", help="Path to a saved GrillSpec JSON (skip grilling entirely)")
     parser.add_argument("--top", type=int, default=5, help="Number of passages to retrieve")
-    parser.add_argument("--output", help="Output .odt path (default: /Disk_bot/writing/grill_<ts>.odt)")
+    parser.add_argument("--output", help="Output .odt path (default: <library>/outputs/grill_<ts>.odt)")
     parser.add_argument("--save-spec", help="Save the spec to this path (default: /tmp/bib_rag_grill_specs/<ts>.json)")
     args = parser.parse_args()
 
@@ -478,7 +478,7 @@ def main():
     for c in cits:
         print(f"  • {c}")
 
-    output = args.output or f"/Disk_bot/writing/grill_{ts}.odt"
+    output = args.output or str(Path(_CFG["outputs_dir"]) / f"grill_{ts}.odt")
     write_odt(paragraph, cits, spec, output)
 
 

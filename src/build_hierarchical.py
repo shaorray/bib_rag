@@ -39,7 +39,7 @@ CHROMA_DB_PATH = _CFG["chroma_path"]
 PARENT_STORE_DIR = _CFG["parent_store_dir"]
 METADATA_LOG = _CFG["metadata_log"]
 CHECKPOINT_FILE = _CFG["checkpoint_file"]
-BGE_M3_PATH = "/Disk_bot/models/bge-m3"  # shared model, not KB-specific
+BGE_M3_PATH = os.environ.get("BIB_RAG_BGE_M3_PATH", "")  # CPU fallback only; GPU build uses the 8081 server instead
 
 # ============== Main Build Process ==============
 
@@ -277,8 +277,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--rebuild", action="store_true", help="Wipe and rebuild from scratch")
-    parser.add_argument("--papers-dir", default="/Disk_bot/paper_lib/My Library/md", help="Markdown papers directory")
+    parser.add_argument("--papers-dir", default=None, help="Markdown papers directory (default: <library>/md)")
     parser.add_argument("--batch-size", type=int, default=50, help="Papers per batch")
     args = parser.parse_args()
     
+    if not args.papers_dir:
+        args.papers_dir = str(Path(_CFG["data_root"]) / "md")
+        print(f"--papers-dir not set; using library default: {args.papers_dir}")
     build_hierarchical(args.papers_dir, args.batch_size, args.rebuild)

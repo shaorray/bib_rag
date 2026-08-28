@@ -44,7 +44,7 @@ def create_llm():
     structured output fail through the OpenAI-compat gateway endpoint. Use
     glm-5.2 or deepseek-v4-flash instead.
     To fall back to local Qwen3.8-27B, set LLM_URL=http://localhost:5015/v1
-    and LLM_MODEL=/Disk_bot/models/huihui_Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-Q5_K_L.gguf
+    and LLM_MODEL=/path/to/model.gguf
     """
     llm_url = os.environ.get("LLM_URL", "http://localhost:11434/v1")
     model_name = os.environ.get("LLM_MODEL", "glm-5.2:cloud")

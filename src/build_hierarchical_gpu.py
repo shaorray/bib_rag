@@ -22,10 +22,13 @@ from datetime import datetime
 import requests
 from langchain_community.vectorstores import Chroma
 
-# Use /Disk_bot/tmp instead of /tmp to avoid disk space issues
+# Optional temp-dir override (e.g. a larger scratch disk) via BIB_RAG_TMPDIR;
+# otherwise the system default applies.
 import tempfile
-tempfile.tempdir = "/Disk_bot/tmp"
-os.environ["TMPDIR"] = "/Disk_bot/tmp"
+_tmp_override = os.environ.get("BIB_RAG_TMPDIR")
+if _tmp_override and os.path.isdir(_tmp_override):
+    tempfile.tempdir = _tmp_override
+    os.environ["TMPDIR"] = _tmp_override
 
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -534,8 +537,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--rebuild", action="store_true", help="Wipe and rebuild")
-    parser.add_argument("--papers-dir", default="/Disk_bot/paper_lib/My Library/md")
+    parser.add_argument("--papers-dir", default=None, help="Markdown papers directory (default: <library>/md)")
     parser.add_argument("--batch-size", type=int, default=50)
     args = parser.parse_args()
     
+    if not args.papers_dir:
+        args.papers_dir = str(Path(_CFG["data_root"]) / "md")
+        print(f"--papers-dir not set; using library default: {args.papers_dir}")
     build_hierarchical_gpu(args.papers_dir, args.batch_size, args.rebuild)

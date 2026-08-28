@@ -384,7 +384,7 @@ def main():
         write_odt(paragraph, citations, topic, output, style)
     else:
         # Default output
-        default_output = f"/Disk_bot/writing/synthesis_{topic[:30].replace(' ', '_')}.odt"
+        default_output = str(Path(_CFG["outputs_dir"]) / f"synthesis_{topic[:30].replace(' ', '_')}.odt")
         write_odt(paragraph, citations, topic, default_output, style)
 
 
