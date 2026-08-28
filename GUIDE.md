@@ -123,6 +123,35 @@ neuro-rag add_papers.py /path/to/pdf/dir/
 Full procedures + pitfalls: Hermes skills `bib-rag-ingest` (write side) and
 `bib-rag-query` (search side).
 
+## Health checks
+
+Run the doctor after big ingests, before upgrades, or whenever search behaves
+oddly. All checks are deterministic and zero-LLM (offline except one optional
+Zotero probe):
+
+```bash
+/usr/bin/python3.10 -B scripts/doctor.py                # text report + exit code
+/usr/bin/python3.10 -B scripts/doctor.py --json         # machine-readable (dashboards/CI)
+/usr/bin/python3.10 -B scripts/doctor.py --strict       # show findings demoted as known noise
+/usr/bin/python3.10 -B scripts/doctor.py --skip-network # fully offline
+/usr/bin/python3.10 -B scripts/doctor.py --doi-report /path/to/doi_issues.md
+/usr/bin/python3.10 -B scripts/doctor.py --kb <name>_rag   # check a non-default library
+```
+
+Checks: chroma↔FTS generation drift, parent_store completeness, citation-graph
+endpoint closure, DOI quality, SQLite integrity, config sanity. Statuses
+are OK / INFO / WARN / FAIL; every WARN/FAIL ships a copy-pasteable remedy. The
+exit code counts FAILs only (0 when clean), so it is safe to wire into CI.
+
+For periodic checks, schedule it with cron and keep only the summary lines, e.g.
+daily at 09:00 appending to a log:
+
+```bash
+0 9 * * * cd /path/to/bib_rag && /usr/bin/python3.10 -B scripts/doctor.py --skip-network >> /path/to/doctor.log 2>&1
+```
+
+(or `--json` if a monitor parses the output). Nothing is scheduled by default.
+
 ## Moving / backing up a library
 
 Libraries are plain folders — `mv` / `tar` / `rsync` as a unit. `config.json`
