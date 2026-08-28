@@ -96,13 +96,25 @@ def download_snapshot(dest_path: str, mailto: str = "") -> bool:
         return False
 
 
+_retraction_cache = None  # module memo: parsed retracted-DOI set (66MB CSV)
+
+
 def load_retractions(cache_days: int = DEFAULT_CACHE_DAYS,
                      snapshot: Optional[str] = None,
                      ) -> Set[str]:
     """Load the retracted-DOI set from the local snapshot.
     Missing + expired snapshot → empty set (offline-safe; caller may
-    trigger --update separately). DOIs are normalized at load time."""
+    trigger --update separately). DOIs are normalized at load time.
+
+    The parsed set is memoized module-level: the snapshot is a 66MB CSV
+    (~1.5s to parse) and `is_retracted()` calls it once per DOI — without
+    the memo a 1270-DOI batch scan re-parses the CSV 1270 times (~33 min
+    measured). Pass `snapshot` explicitly to bypass the cache.
+    """
+    global _retraction_cache
     path = snapshot or snapshot_path()
+    if snapshot is None and _retraction_cache is not None:
+        return _retraction_cache
     if not os.path.exists(path) or _cache_expired(path, cache_days):
         return set()
     dois: Set[str] = set()
@@ -117,6 +129,8 @@ def load_retractions(cache_days: int = DEFAULT_CACHE_DAYS,
                         dois.add(nd)
     except (OSError, csv.Error, UnicodeDecodeError):
         return set()
+    if snapshot is None:
+        _retraction_cache = dois
     return dois
 
 
@@ -158,7 +172,11 @@ def is_retracted(doi: str, retractions: Optional[Set[str]] = None) -> bool:
 def check_sources(store_dir: Optional[str] = None,
                   retractions: Optional[Set[str]] = None) -> Dict[str, dict]:
     """Check the parent_store's papers for retracted DOIs.
-    Returns {source: {'doi':..., 'retracted': bool}}."""
+    Returns {source: {'doi':..., 'retracted': bool}}.
+
+    `retractions=None` (default) loads the snapshot once (memoized) — this
+    used to be a silent no-op (`retractions is not None and ...` never
+    fired), so the default call reported nothing instead of scanning."""
     if os.environ.get("RETRACTION_CHECK", "1") == "0":
         return {}
     if store_dir is None:
@@ -169,6 +187,8 @@ def check_sources(store_dir: Optional[str] = None,
             return {}
     if not store_dir or not os.path.isdir(store_dir):
         return {}
+    if retractions is None:
+        retractions = load_retractions()
     out: Dict[str, dict] = {}
     for fn in sorted(os.listdir(store_dir)):
         if not fn.endswith(".json"):
@@ -185,7 +205,7 @@ def check_sources(store_dir: Optional[str] = None,
         nd = normalize_doi(doi)
         if not nd:
             continue
-        if retractions is not None and nd in retractions:
+        if nd in retractions:
             out[meta.get("title") or fn] = {"doi": nd, "retracted": True}
     return out
 

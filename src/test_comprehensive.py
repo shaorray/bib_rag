@@ -26,9 +26,17 @@ from agentic_query import invoke_with_interrupt_handling
 
 
 def create_llm():
+    # Keep _resolve_limits() (agent_nodes) in sync: it reads LLM_URL/LLM_MODEL
+    # from the environment to pick local-vs-cloud iteration limits. This
+    # runner targets the local 5015 server explicitly, so export both —
+    # without them the limiter assumed a cloud model, enabled mid-loop
+    # compression, and the compress prompt blew the 4096-token local slot
+    # (server-side 400 'exceed_context_size_error').
+    os.environ.setdefault("LLM_URL", "http://localhost:5015/v1")
+    os.environ.setdefault("LLM_MODEL", "qwen3.6-35b")
     return ChatOpenAI(
-        base_url="http://localhost:5015/v1",
-        model="qwen3.6-35b",
+        base_url=os.environ["LLM_URL"],
+        model=os.environ["LLM_MODEL"],
         api_key="not-needed",
         temperature=0.1,
         max_tokens=8192,

@@ -922,6 +922,167 @@ def test_retraction_doctor_smoke(tmpdir):
 
 
 # ---------------------------------------------------------------------------
+# Full-功能实测 (2026-08-28) 抓到的四个 bug 的回归测试
+# ---------------------------------------------------------------------------
+
+def test_zotero_tokens_split_glued_words():
+    """Zotero PDF-title scrapes lose spaces ('PerturbsXenopusGastrulation',
+    'p120ctn1A'); token similarity must split camelCase/letter-digit
+    boundaries BEFORE lowercasing or the true paper is rejected (real-data
+    bug: sim 0.308 < 0.55 → correct hit rejected)."""
+    from src.zotero_match import title_similarity
+    q = ("Misexpression of the catenin p120(ctn)1A perturbs Xenopus "
+         "gastrulation")
+    scraped = ("Misexpression of the Catenin p120ctn1A PerturbsXenopus"
+               "Gastrulation But Does Not Elicit Wnt-Directed Axis "
+               "Specification")
+    sim = title_similarity(q, scraped)
+    assert sim >= 0.55, f"glued-title similarity still too low: {sim:.3f}"
+    # discriminative power must survive: unrelated papers stay far apart
+    assert title_similarity("Eph receptor signalling in axon guidance",
+                            "Ephrin signalling in angiogenesis") < 0.55
+    assert title_similarity("a randomized trial of drug X",
+                            "B cell receptor signalling") < 0.1
+    print(f"  ✓ title tokens split glued Zotero scrapes (sim={sim:.3f})")
+
+
+def test_retraction_cache_single_load(tmpdir):
+    """The 66MB snapshot used to be re-parsed on EVERY is_retracted() call
+    (1.5s × 1270 DOIs ≈ 33min measured). The module memo makes repeat calls
+    O(1); explicit `snapshot=` bypasses it."""
+    import importlib
+    import src.retraction_watch as rw
+    snap = os.path.join(str(tmpdir), "rw.csv")
+    with open(snap, "w") as f:
+        f.write(_RETRACTION_CSV)
+    # first call with explicit snapshot bypasses memo and returns a set
+    r1 = rw.load_retractions(snapshot=snap, cache_days=-1)
+    assert "10.1093/cvr/cvr154" in r1
+    # default-path call populates the memo; second call is the SAME object
+    orig_path = rw.snapshot_path
+    try:
+        rw.snapshot_path = lambda: snap
+        rw._retraction_cache = None
+        a = rw.load_retractions()
+        b = rw.load_retractions()
+        assert a is b, "memoized set should be returned by identity"
+        assert "10.1093/cvr/cvr154" in a
+    finally:
+        rw.snapshot_path = orig_path
+        rw._retraction_cache = None
+    print("  ✓ retraction_watch: module memo returns the cached set")
+
+
+def test_retraction_check_sources_default_loads(tmpdir):
+    """check_sources(retractions=None) used to be a silent no-op
+    (`retractions is not None and ...` never fired). The default call must
+    load the snapshot itself and flag the retracted paper."""
+    from src.retraction_watch import check_sources
+    import src.retraction_watch as rw
+    store = str(tmpdir)
+    with open(os.path.join(store, "retracted_md.json"), "w") as f:
+        json.dump([{"parent_id": "r.md#full#x", "source": "r.md",
+                    "section": "full_text", "content": "x", "word_count": 1,
+                    "char_count": 1,
+                    "meta": {"title": "Cardiovasc retraction case",
+                             "doi": "10.1093/cvr/cvr154"}}], f)
+    snap = os.path.join(str(tmpdir), "rw.csv")
+    with open(snap, "w") as f:
+        f.write(_RETRACTION_CSV)
+    orig_path = rw.snapshot_path
+    try:
+        rw.snapshot_path = lambda: snap
+        rw._retraction_cache = None
+        hits = check_sources(store_dir=store)  # retractions=None!
+        assert set(hits) == {"Cardiovasc retraction case"}, hits
+    finally:
+        rw.snapshot_path = orig_path
+        rw._retraction_cache = None
+    print("  ✓ check_sources(None) loads the snapshot itself (no silent no-op)")
+
+
+def test_search_call_budget_cap():
+    """A single search call with 6 results × 800-char excerpts ≈ 5.5KB;
+    TWO parallel calls then blew the 4096-token local slot (llama-server
+    400 'exceed_context_size_error'). The formatted call output must be
+    capped by SEARCH_CALL_MAX_CHARS."""
+    from src.agent_tools import _clip
+    import src.agent_tools as at
+    fused = [{"source": f"s{i}.md", "section": "full_text",
+              "parent_id": f"p{i}", "similarity": 0.9,
+              "text": "x" * 800, "channels": "vec"}
+             for i in range(6)]
+    # poke the private method through a stub factory (no Chroma needed)
+    ToolFactory = at.ToolFactory
+    factory = ToolFactory.__new__(ToolFactory)  # skip __init__ (no DB)
+    out = factory._format_results(fused)
+    # cap is checked AFTER appending a result → worst case = cap + one result
+    assert len(out) <= at.SEARCH_CALL_MAX_CHARS + 900, (
+        f"call output {len(out)} exceeds budget {at.SEARCH_CALL_MAX_CHARS}")
+    assert "call capped" in out  # transparent drop marker
+    print(f"  ✓ search call budget: {len(out)} chars < "
+          f"{at.SEARCH_CALL_MAX_CHARS} cap, drop marker present")
+
+
+def test_local_parallel_tool_call_cap():
+    """Qwen issues 2-3 parallel tool calls per round; their combined outputs
+    (plus prompts ≈1650 tok) blew the 4096-token local slot. The orchestrator
+    must cap to 1 call/round when LLM points at a local slot — and leave
+    cloud (11434) rounds untouched."""
+    import os
+    from src import agent_nodes as an
+
+    class FakeAIMessage:
+        def __init__(self, n):
+            self.tool_calls = [{"name": "search_child_chunks", "args": {"query": f"q{i}"},
+                                "id": f"call_{i}"} for i in range(n)]
+
+    orig_url, orig_model = os.environ.get("LLM_URL"), os.environ.get("LLM_MODEL")
+    try:
+        os.environ["LLM_URL"] = "http://localhost:5015/v1"
+        resp = an._cap_parallel_tool_calls(FakeAIMessage(3))
+        assert len(resp.tool_calls) == 1, resp.tool_calls
+        # cloud round untouched (fresh instance — the cap mutates in place)
+        os.environ["LLM_URL"] = "http://localhost:11434/v1"
+        resp2 = an._cap_parallel_tool_calls(FakeAIMessage(3))
+        assert len(resp2.tool_calls) == 3, resp2.tool_calls
+        # single call never touched
+        resp2 = an._cap_parallel_tool_calls(FakeAIMessage(1))
+        assert len(resp2.tool_calls) == 1
+    finally:
+        if orig_url is None:
+            os.environ.pop("LLM_URL", None)
+        else:
+            os.environ["LLM_URL"] = orig_url
+        if orig_model is not None:
+            os.environ["LLM_MODEL"] = orig_model
+    print("  ✓ local slot: parallel tool calls capped to 1/round; cloud untouched")
+
+
+def test_agent_tools_local_budget_default():
+    """RETRIEVE_PARENT_MAX_CHARS must default to 4000 (not 8000) when the
+    env points at the local 5015 slot — 2×8000-char parents ≈ 4500 tokens
+    alone, over a 4096-token slot."""
+    import importlib
+    from src import agent_tools as at
+    orig_url = os.environ.get("LLM_URL")
+    try:
+        os.environ["LLM_URL"] = "http://localhost:5015/v1"
+        importlib.reload(at)
+        assert at.RETRIEVE_PARENT_MAX_CHARS == 4000, at.RETRIEVE_PARENT_MAX_CHARS
+        assert at._is_local_llm() is True
+    finally:
+        if orig_url is None:
+            os.environ.pop("LLM_URL", None)
+        else:
+            os.environ["LLM_URL"] = orig_url
+        importlib.reload(at)  # restore cloud-default state for other tests
+    print("  ✓ agent_tools: local LLM → tighter parent budget default (4000)")
+
+
+
+
+# ---------------------------------------------------------------------------
 # fixture
 # ---------------------------------------------------------------------------
 

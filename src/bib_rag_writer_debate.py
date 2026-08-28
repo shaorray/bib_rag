@@ -128,6 +128,29 @@ def search_zotero(title: str, doi: str = "",
     else:
         ok, _s, _r = verify_zotero_hit(
             clean_title, doi, {"title": full.get("title", ""), "doi": full.get("doi", "")})
+
+    # Snippet fallback: the MCP search snippet carries NO doi (markdown parse
+    # hardcodes doi:""), so a DOI-carrying query can only verify at the full
+    # record — pick_best_hit never sees an identifier and rejects on title
+    # similarity alone. When snippet-level pickup failed, retry each candidate
+    # against its FULL record before giving up (one HTTP call per candidate,
+    # capped at 3).
+    if not ok:
+        for cand in items[:3]:
+            if cand.get("key") == best.get("key"):
+                continue
+            cand_full = zotero_access.zotero_item(cand["key"])
+            if not cand_full:
+                continue
+            if query_ids:
+                ok, _s, _r = verify_zotero_hit_ids(clean_title, query_ids, cand_full)
+            else:
+                ok, _s, _r = verify_zotero_hit(
+                    clean_title, doi,
+                    {"title": cand_full.get("title", ""), "doi": cand_full.get("doi", "")})
+            if ok:
+                full = cand_full
+                break
     if not ok:
         return None
     return {

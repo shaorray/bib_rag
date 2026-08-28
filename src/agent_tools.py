@@ -38,10 +38,28 @@ def _budget(name: str, default: int) -> int:
     except ValueError:
         return default
 
-RETRIEVE_PARENT_MAX_CHARS = _budget("RETRIEVE_PARENT_MAX_CHARS", 8000)   # ~2000 tokens
+
+def _is_local_llm() -> bool:
+    """True when the LLM_URL/LLM_MODEL points at a local llama-server slot
+    (GGUF or :5015) — same detection as agent_nodes._resolve_limits. Local
+    slots are 4096 tokens (`-c 8192 -np 2`), so tool budgets must default
+    tighter than for cloud models with 32k+ windows."""
+    model = os.environ.get("LLM_MODEL", "")
+    llm_url = os.environ.get("LLM_URL", "")
+    return model.endswith(".gguf") or ":5015" in llm_url
+
+
+RETRIEVE_PARENT_MAX_CHARS = _budget("RETRIEVE_PARENT_MAX_CHARS",
+                                    4000 if _is_local_llm() else 8000)  # ~1000/2000 tokens
 SEARCH_RESULT_MAX_CHARS = _budget("SEARCH_RESULT_MAX_CHARS", 800)        # per result
 MANY_PARENT_MAX_CHARS = _budget("MANY_PARENT_MAX_CHARS", 1500)
 SEARCH_MAX_LIMIT = _budget("SEARCH_MAX_LIMIT", 6)
+# Whole-call cap: with SEARCH_MAX_LIMIT=6 results × (800 chars + headers) a
+# single search can emit ~5.5KB (~1400 tokens); Qwen issues up to 3 parallel
+# searches in one round, so the ROUND budget is what matters for a 4096-token
+# local slot: base prompts (~1650 tok measured) + Σ tool calls must stay
+# under 4096 → search 2200, parent 4000 chars per call.
+SEARCH_CALL_MAX_CHARS = _budget("SEARCH_CALL_MAX_CHARS", 2200)           # ~550 tokens
 
 
 def _clip(text: str, max_chars: int) -> str:
@@ -114,6 +132,14 @@ class ToolFactory:
                 f"Parent ID: {r['parent_id']}\n"
                 f"Content: {_clip(r['text'], SEARCH_RESULT_MAX_CHARS)}"
             )
+            # Whole-call budget: stop adding results once the formatted output
+            # would exceed SEARCH_CALL_MAX_CHARS (parallel tool calls multiply
+            # this — see the budget note at the top of this file).
+            if sum(len(x) + 2 for x in output_lines) >= SEARCH_CALL_MAX_CHARS:
+                output_lines.append(
+                    f"…[call capped at {SEARCH_CALL_MAX_CHARS} chars; "
+                    f"{len(fused) - i - 1} result(s) dropped — narrow the query or raise SEARCH_CALL_MAX_CHARS]")
+                break
         return "\n\n".join(output_lines)
 
     def _vector_entries(self, results) -> List[dict]:

@@ -53,7 +53,14 @@ study studies analysis approach method methods using based novel new
 
 
 def _title_tokens(title: str) -> set:
-    t = (title or "").lower()
+    # Split camelCase / letter-digit boundaries on the ORIGINAL string, BEFORE
+    # lowercasing: Zotero PDF-title scrapes lose spaces ("PerturbsXenopus-
+    # Gastrulation", "p120ctn1A"), which tokenizing alone can never recover.
+    t = title or ""
+    t = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", t)
+    t = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", t)
+    t = re.sub(r"(?<=\d)(?=[A-Za-z])", " ", t)
+    t = t.lower()
     t = re.sub(r"et\s+al\.?", " ", t)
     t = re.sub(r"\b(19|20)\d{2}\b", " ", t)          # years
     t = re.sub(r"[^a-z0-9\s\-]", " ", t)

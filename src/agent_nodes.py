@@ -50,7 +50,18 @@ def _resolve_limits():
         return iters or 3, tools or 4   # slow local model: conservative, avoid timeout
     return iters or 10, tools or 8      # fast cloud model: generous
 
+
 MAX_ITERATIONS, MAX_TOOL_CALLS = _resolve_limits()
+
+
+def is_local_llm() -> bool:
+    """True when LLM_URL/LLM_MODEL points at a local llama-server slot
+    (GGUF path or :5015) — shared with agent_tools budget defaults."""
+    model = os.environ.get("LLM_MODEL", "")
+    llm_url = os.environ.get("LLM_URL", "")
+    return model.endswith(".gguf") or ":5015" in llm_url
+
+
 BASE_TOKEN_THRESHOLD = 2000
 TOKEN_GROWTH_FACTOR = 0.9
 
@@ -172,6 +183,20 @@ def request_clarification(state: State):
 # --- Agent Subgraph Nodes ---
 
 
+def _cap_parallel_tool_calls(response):
+    """Round-level tool budget for local slots: a 4096-token llama-server slot
+    cannot hold several parallel tool RESULTS on top of prompts + history
+    (measured: Qwen emits ~2 chars/token, so 3×3000-char tool outputs alone ≈
+    4500 tokens → server-side 400). Keep only the first tool call per round;
+    parallelism is a cloud-model luxury. Mutates + returns the response."""
+    tcs = getattr(response, "tool_calls", None) or []
+    if is_local_llm() and len(tcs) > 1:
+        # Dropped calls simply never execute; the model re-requests them next
+        # round. No note injection — the AIMessage keeps its original content.
+        response.tool_calls = tcs[:1]
+    return response
+
+
 def orchestrator(state: AgentState, llm_with_tools):
     """Main agent reasoning node.
 
@@ -203,7 +228,8 @@ def orchestrator(state: AgentState, llm_with_tools):
         force_search = HumanMessage(
             content="YOU MUST CALL 'search_child_chunks' AS THE FIRST STEP TO ANSWER THIS QUESTION."
         )
-        response = llm_with_tools.invoke([sys_msg] + summary_injection + [human_msg, force_search])
+        response = _cap_parallel_tool_calls(
+            llm_with_tools.invoke([sys_msg] + summary_injection + [human_msg, force_search]))
         return {
             "messages": [human_msg, response],
             "tool_call_count": len(response.tool_calls or []),
@@ -211,7 +237,8 @@ def orchestrator(state: AgentState, llm_with_tools):
             "force_search_done": True,
         }
 
-    response = llm_with_tools.invoke([sys_msg] + summary_injection + state["messages"])
+    response = _cap_parallel_tool_calls(
+        llm_with_tools.invoke([sys_msg] + summary_injection + state["messages"]))
     tool_calls = response.tool_calls if hasattr(response, "tool_calls") else []
     return {
         "messages": [response],
