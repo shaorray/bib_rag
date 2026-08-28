@@ -11,7 +11,7 @@ MD_DIR = "/Disk_bot/Eph/Cadherin_papers/md"
 
 def main():
     mds = sorted(f for f in os.listdir(MD_DIR) if f.endswith('.md'))
-    print(f"待索引: {len(mds)} 篇 Cadherin md")
+    print(f"to index: {len(mds)} Cadherin md files")
     t0 = time.time()
     ok = fail = skip = 0
     for i, f in enumerate(mds, 1):
@@ -27,7 +27,7 @@ def main():
         if i % 20 == 0 or i == len(mds):
             el = time.time() - t0
             print(f"[{i}/{len(mds)}] ok={ok} skip={skip} fail={fail} ({el:.0f}s)", file=sys.stderr)
-    print(f"\n完成: ok={ok} skip={skip} fail={fail} 总耗时 {time.time()-t0:.0f}s")
+    print(f"\ndone: ok={ok} skip={skip} fail={fail}, {time.time()-t0:.0f}s total")
 
 if __name__ == "__main__":
     main()

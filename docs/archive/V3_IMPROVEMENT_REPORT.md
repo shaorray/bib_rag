@@ -1,110 +1,110 @@
-# V3 知识库改进报告
+# V3 Knowledge Base Improvement Report
 
-## 1. 章节分类优化 ✅
+## 1. Section Classification Optimization ✅
 
-### 问题
-- 原始: "other"占比81.4%，核心章节仅18.6%
-- 原因: 章节标题格式不统一，缺少映射规则
+### Problem
+- Original: "other" accounted for 81.4%, with core sections at only 18.6%
+- Cause: Inconsistent section title formats and missing mapping rules
 
-### 改进措施
-1. **扩展SECTION_MAP**: 增加40+章节映射规则
-2. **添加关键词检测**: 
-   - 方法关键词: antibodies, plasmids, cell culture, western blot等
-   - 结果关键词: figure, table, supplementary等
-3. **扩展SKIP_SECTIONS**: 过滤"Open in a new tab", "Author Manuscript"等非学术内容
+### Improvements
+1. **Expanded SECTION_MAP**: Added 40+ section mapping rules
+2. **Added keyword detection**:
+   - Methods keywords: antibodies, plasmids, cell culture, western blot, etc.
+   - Results keywords: figure, table, supplementary, etc.
+3. **Expanded SKIP_SECTIONS**: Filtered non-academic content such as "Open in a new tab" and "Author Manuscript"
 
-### 效果
+### Results
 ```
-章节分布对比:
+Section distribution comparison:
 
-改进前 (V3初始):
+Before improvement (initial V3):
   other:         81.4%
-  核心章节:      18.6%
+  Core sections: 18.6%
 
-改进后 (V3最终):
+After improvement (final V3):
   other:         73.4%  ↓8%
   methods:        8.2%  ↑7.5%
   discussion:     6.8%  ↑3.5%
   abstract:       4.1%  ↑0.9%
   introduction:   4.0%  ↑1.4%
   results:        1.8%  ↑0.9%
-  核心章节:      26.6%  ↑8%
+  Core sections: 26.6%  ↑8%
 ```
 
-## 2. 元数据过滤查询 ✅
+## 2. Metadata-Filtered Queries ✅
 
-### 实现功能
+### Implemented Features
 ```python
-# 按年份过滤
+# Filter by year
 results = kb.query("cis interaction", year_min=2020)
 
-# 按影响因子过滤
+# Filter by impact factor
 results = kb.query("signaling", min_if=10.0)
 
-# 按章节过滤
+# Filter by section
 results = kb.query("binding", section="results")
 
-# 组合过滤
+# Combined filters
 results = kb.query("EphA4", year_min=2015, min_if=5.0, journal="Nature")
 ```
 
-### 支持字段
-- year_min/year_max: 年份范围
-- journal: 期刊名（部分匹配）
-- min_if: 最小影响因子
-- section: 章节类型
-- tier: 期刊等级
+### Supported Fields
+- year_min/year_max: Year range
+- journal: Journal name (partial match)
+- min_if: Minimum impact factor
+- section: Section type
+- tier: Journal tier
 
-## 3. 混合搜索 ✅
+## 3. Hybrid Search ✅
 
-### 实现原理
+### How It Works
 ```
-混合搜索 = 语义搜索 × 0.6 + BM25关键词搜索 × 0.4
+Hybrid search = semantic search × 0.6 + BM25 keyword search × 0.4
 ```
 
-### 代码实现
+### Implementation
 ```python
 class HybridSearch:
     def search(self, query, semantic_weight=0.6, bm25_weight=0.4):
-        # 1. 语义搜索 (768维向量相似度)
+        # 1. Semantic search (768-dim vector similarity)
         semantic_scores = np.dot(embeddings, query_embedding)
         
-        # 2. BM25搜索 (关键词匹配)
+        # 2. BM25 search (keyword matching)
         bm25_scores = bm25_index.search(query)
         
-        # 3. 混合分数
+        # 3. Combined score
         combined = semantic_weight * semantic_scores + bm25_weight * bm25_scores
         
         return top_k_results
 ```
 
-### 效果对比
-| 查询 | 纯语义 | 混合搜索 | 提升 |
+### Results Comparison
+| Query | Semantic only | Hybrid search | Gain |
 |------|--------|----------|------|
 | "Eph receptor signaling" | 0.97 | 0.98 | +0.01 |
 | "cis interaction" | 0.40 | 0.45 | +0.05 |
 | "ephrin binding" | 0.73 | 0.78 | +0.05 |
 
-## 4. 新增文件
+## 4. New Files
 
-| 文件 | 功能 |
+| File | Purpose |
 |------|------|
-| `process_v3_papers.py` | V3处理脚本 (all-mpnet-base-v2) |
-| `query_v3_kb.py` | V3查询脚本 (支持元数据过滤) |
-| `hybrid_search.py` | 混合搜索实现 (语义+BM25) |
-| `chroma_db_v3/ephrin_papers_v3.pkl` | V3知识库数据 |
+| `process_v3_papers.py` | V3 processing script (all-mpnet-base-v2) |
+| `query_v3_kb.py` | V3 query script (supports metadata filters) |
+| `hybrid_search.py` | Hybrid search implementation (semantic + BM25) |
+| `chroma_db_v3/ephrin_papers_v3.pkl` | V3 knowledge base data |
 
-## 5. 技术栈
+## 5. Tech Stack
 
-- **Embedding模型**: all-mpnet-base-v2 (768维)
-- **分块策略**: 800词/块，200词重叠
-- **去重**: 基于文本前300字符的哈希去重
-- **索引**: 向量内积 + BM25
-- **过滤**: 年份/期刊/IF/章节/等级
+- **Embedding model**: all-mpnet-base-v2 (768 dims)
+- **Chunking strategy**: 800 words per chunk, 200-word overlap
+- **Deduplication**: Hash-based dedup on the first 300 characters of text
+- **Indexing**: Vector inner product + BM25
+- **Filters**: Year / journal / IF / section / tier
 
-## 6. 待优化项
+## 6. Remaining Optimization Items
 
-1. **章节分类**: 仍需进一步降低"other"比例
-2. **Reranker**: 添加Cross-encoder重排序
-3. **增量更新**: 支持新增文献而不重建
-4. **API封装**: 提供RESTful API接口
+1. **Section classification**: Further reduce the "other" proportion
+2. **Reranker**: Add cross-encoder reranking
+3. **Incremental updates**: Support adding new papers without rebuilding
+4. **API wrapper**: Provide a RESTful API interface

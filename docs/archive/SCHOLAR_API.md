@@ -1,26 +1,26 @@
-# 📚 学术写作调用指南
+# 📚 Academic Writing Usage Guide
 
-## 快速调用
+## Quick Invocation
 
-### 方法 1: 命令行直接查询（推荐）
+### Method 1: Direct Queries from the Command Line (Recommended)
 
 ```bash
 cd /Disk_2/claw_working_dir/ephrin_agentic_rag
 
-# 查找引用
+# Find citations
 python3 quick_query.py "cis interaction inhibits Eph signaling"
 
-# 交互式写作辅助
+# Interactive writing assistance
 python3 academic_writer.py
 
-# 示例交互:
+# Example interaction:
 # > cite cis interaction inhibits signaling
 # > check Eph receptor requires clustering
 # > related axon guidance
 # > quit
 ```
 
-### 方法 2: Python API 调用
+### Method 2: Python API
 
 ```python
 import sys
@@ -29,7 +29,7 @@ sys.path.insert(0, '/Disk_2/claw_working_dir/ephrin_agentic_rag')
 from rag_core import SimpleEmbedding, DocumentStore
 from agentic_workflow import AgenticRAGWorkflow
 
-# 初始化
+# Initialize
 doc_store = DocumentStore('ephrin_papers', 
     '/Disk_2/claw_working_dir/ephrin_agentic_rag/chroma_db')
 embedder = SimpleEmbedding()
@@ -40,25 +40,25 @@ def retriever(query, k=8):
 
 workflow = AgenticRAGWorkflow(retriever)
 
-# 查询
+# Query
 result = workflow.run("cis interaction mechanism")
 print(result['answer'])
 ```
 
 ---
 
-## 📝 论文写作场景
+## 📝 Paper Writing Scenarios
 
-### 场景 1: 找引用
+### Scenario 1: Finding Citations
 
-**问题**: 写了 "Cis-interaction inhibits Eph receptor signaling"，需要引用
+**Problem**: You wrote "Cis-interaction inhibits Eph receptor signaling" and need citations
 
-**调用**:
+**Invocation**:
 ```bash
 python3 academic_writer.py --cite "cis interaction inhibits Eph signaling"
 ```
 
-**输出**:
+**Output**:
 ```
 [1] Kao and Kania (2011) - rel: 0.240
     Ephrin-Mediated cis-Attenuation of Eph Receptor Signaling...
@@ -67,7 +67,7 @@ python3 academic_writer.py --cite "cis interaction inhibits Eph signaling"
     Silencing of EphA3 through a cis interaction...
 ```
 
-**论文中使用**:
+**Usage in the paper**:
 ```latex
 Cis-interaction inhibits Eph receptor signaling 
 (Kao \& Kania, 2011; Carvalho et al., 2006).
@@ -75,33 +75,33 @@ Cis-interaction inhibits Eph receptor signaling
 
 ---
 
-### 场景 2: 事实核查
+### Scenario 2: Fact Checking
 
-**问题**: 不确定 "Eph receptors require clustering for activation" 是否准确
+**Problem**: You are unsure whether "Eph receptors require clustering for activation" is accurate
 
-**调用**:
+**Invocation**:
 ```bash
 python3 academic_writer.py --check "Eph receptors require clustering"
 ```
 
-**输出**:
+**Output**:
 ```
-✓ 支持度: moderate
-  建议: 该陈述有一定文献支持，建议进一步查阅
+✓ Support level: moderate
+  Suggestion: This statement has some literature support; consider consulting related literature further
 ```
 
 ---
 
-### 场景 3: Related Work
+### Scenario 3: Related Work
 
-**问题**: 写 Related Work 章节，找关于 "axon guidance" 的文献
+**Problem**: Writing a Related Work section and need literature on "axon guidance"
 
-**调用**:
+**Invocation**:
 ```bash
 python3 academic_writer.py --related "axon guidance"
 ```
 
-**输出**:
+**Output**:
 ```
 [1] Bush and Soriano (2009): Ephrin-B1 regulates axon guidance...
 [2] Williams et al. (2003): Ephrin-B2 and EphB1 Mediate Retinal Axon Divergence...
@@ -109,24 +109,24 @@ python3 academic_writer.py --related "axon guidance"
 
 ---
 
-### 场景 4: 检查争议
+### Scenario 4: Checking for Controversy
 
-**问题**: 想讨论 "cis-interaction is always inhibitory" 是否存在争议
+**Problem**: You want to discuss whether "cis-interaction is always inhibitory" is controversial
 
-**调用**:
+**Invocation**:
 ```bash
 python3 academic_writer.py --controversial "cis-interaction is always inhibitory"
 ```
 
-**输出**:
+**Output**:
 ```
-⚖️ 争议程度: moderate
-  支持文献: 12
-  反对文献: 5
-  建议: 该论断存在一定争议，建议提及不同观点
+⚖️ Controversy level: moderate
+  Supporting papers: 12
+  Opposing papers: 5
+  Suggestion: This claim is somewhat controversial; consider mentioning different viewpoints
 ```
 
-**论文中使用**:
+**Usage in the paper**:
 ```latex
 However, whether cis-interaction is exclusively inhibitory 
 remains debated (cite supporting; cite opposing)...
@@ -134,50 +134,50 @@ remains debated (cite supporting; cite opposing)...
 
 ---
 
-### 场景 5: 生成段落支持
+### Scenario 5: Generating Paragraph Support
 
-**问题**: 需要为关于 "tetramerization" 的段落找支持材料
+**Problem**: You need supporting material for a paragraph about "tetramerization"
 
-**调用**:
+**Invocation**:
 ```bash
 python3 academic_writer.py --support "tetramerization"
 ```
 
-**输出**:
+**Output**:
 ```
 ### Tetramerization - Mechanism
 
 [1] Falivelli et al. (2013) reported that tetrameric Eph receptor 
 complexes are essential for full activation...
 
-[支持度: 0.22]
+[Support level: 0.22]
 ```
 
 ---
 
-## 🔧 集成到 LaTeX 工作流
+## 🔧 Integration into the LaTeX Workflow
 
-### 方法 1: Makefile 快捷命令
+### Method 1: Makefile Shortcuts
 
-在论文目录创建 `Makefile`:
+Create a `Makefile` in your paper directory:
 
 ```makefile
-# 查找引用
+# Find citations
 cite:
 	@cd /Disk_2/claw_working_dir/ephrin_agentic_rag && \
 	python3 quick_query.py "$(filter-out $@,$(MAKECMDGOALS))"
 
-# 检查段落
+# Check paragraphs
 %:
 	@:
 ```
 
-使用:
+Usage:
 ```bash
 make cite cis interaction
 ```
 
-### 方法 2: VS Code 任务
+### Method 2: VS Code Tasks
 
 `.vscode/tasks.json`:
 ```json
@@ -194,7 +194,7 @@ make cite cis interaction
 }
 ```
 
-### 方法 3: Emacs/Vim 快捷键
+### Method 3: Emacs/Vim Shortcuts
 
 Emacs (init.el):
 ```elisp
@@ -210,9 +210,9 @@ Emacs (init.el):
 
 ---
 
-## 📊 批量写作辅助
+## 📊 Batch Writing Assistance
 
-创建 `write_helper.py`:
+Create a `write_helper.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -223,7 +223,7 @@ from academic_writer import AcademicWritingAssistant
 
 assistant = AcademicWritingAssistant()
 
-# 论文中需要核查的论断
+# Claims to be checked in the paper
 claims = [
     "Eph receptors require clustering for activation",
     "Cis-interaction is inhibitory",
@@ -231,90 +231,90 @@ claims = [
     "Eph-ephrin signaling maintains tissue boundaries",
 ]
 
-print("=== 论文论断核查报告 ===\n")
+print("=== Paper Claim Verification Report ===\n")
 
 for claim in claims:
     result = assistant.fact_check(claim)
     print(f"✓ {claim}")
-    print(f"  支持度: {result['support_level']}")
-    print(f"  置信度: {result['confidence']:.2f}\n")
+    print(f"  Support level: {result['support_level']}")
+    print(f"  Confidence: {result['confidence']:.2f}\n")
 ```
 
-运行:
+Run it:
 ```bash
 python3 write_helper.py
 ```
 
 ---
 
-## 💡 使用技巧
+## 💡 Usage Tips
 
-### 1. 相关性阈值
+### 1. Relevance Threshold
 
-| 阈值 | 说明 | 建议 |
+| Threshold | Meaning | Advice |
 |------|------|------|
-| > 0.25 | 高度相关 | 可直接引用 |
-| 0.15-0.25 | 中等相关 | 结合语境使用 |
-| < 0.15 | 弱相关 | 建议修改查询词 |
+| > 0.25 | Highly relevant | Can be cited directly |
+| 0.15-0.25 | Moderately relevant | Use with context in mind |
+| < 0.15 | Weakly relevant | Consider revising the query terms |
 
-### 2. 查询词优化
+### 2. Query Term Optimization
 
-❌ 不好: `"interaction"`  
-✅ 更好: `"Eph ephrin cis interaction"`
+❌ Bad: `"interaction"`  
+✅ Better: `"Eph ephrin cis interaction"`
 
-❌ 不好: `"signaling"`  
-✅ 更好: `"reverse signaling ephrinB"`
+❌ Bad: `"signaling"`  
+✅ Better: `"reverse signaling ephrinB"`
 
-### 3. 组合查询
+### 3. Combined Queries
 
-对于复杂论断，使用多跳推理:
+For complex claims, use multi-hop reasoning:
 ```bash
 python3 query_interface.py --multihop "Compare cis and trans signaling"
 ```
 
 ---
 
-## 📚 知识库覆盖
+## 📚 Knowledge Base Coverage
 
-| 主题 | 覆盖度 |
+| Topic | Coverage |
 |------|--------|
-| Cis-interaction | 8 篇 |
-| Reverse signaling | 12 篇 |
-| Tetramerization | 5 篇 |
-| Axon guidance | 16 篇 |
-| Cancer/Metastasis | 24 篇 |
-| Cell segregation | 14 篇 |
+| Cis-interaction | 8 papers |
+| Reverse signaling | 12 papers |
+| Tetramerization | 5 papers |
+| Axon guidance | 16 papers |
+| Cancer/Metastasis | 24 papers |
+| Cell segregation | 14 papers |
 
-**总计**: 199 篇论文，388 个文档块
-
----
-
-## 🐛 故障排除
-
-**问题**: "No documents found"
-**解决**: 使用更具体的专业术语，如 `"EphB4 ephrinB2"` 而非 `"protein interaction"`
-
-**问题**: 置信度太低
-**解决**: 
-1. 检查查询是否包含专业术语
-2. 尝试同义词，如 `"cis"` → `"cis interaction"` → `"cis attenuation"`
-3. 使用多跳模式分解复杂查询
+**Total**: 199 papers, 388 document chunks
 
 ---
 
-## 🎯 最佳实践
+## 🐛 Troubleshooting
 
-1. **边写边查**: 每写一个论断就查一次引用
-2. **事实核查**: 不确定的陈述先用 `--check` 验证
-3. **记录引用**: 用 `export` 保存找到的引用
-4. **争议标注**: 有争议的论断用 `--controversial` 标记
-5. **Related Work**: 定期用 `--related` 更新文献综述
+**Problem**: "No documents found"  
+**Solution**: Use more specific technical terms, e.g. `"EphB4 ephrinB2"` instead of `"protein interaction"`
+
+**Problem**: Confidence is too low  
+**Solution**: 
+1. Check whether the query contains technical terms
+2. Try synonyms, e.g. `"cis"` → `"cis interaction"` → `"cis attenuation"`
+3. Use multi-hop mode to decompose complex queries
 
 ---
 
-## 📖 完整文档
+## 🎯 Best Practices
 
-- `README.md` - 系统架构说明
-- `USAGE.md` - 详细使用说明
-- `ACADEMIC_USAGE.md` - 学术写作专用指南
-- `QUICK_START.md` - 快速开始
+1. **Check as you write**: Look up citations every time you write a claim
+2. **Fact check**: Verify uncertain statements with `--check` first
+3. **Record citations**: Use `export` to save the citations you find
+4. **Flag controversies**: Mark controversial claims with `--controversial`
+5. **Related Work**: Periodically refresh your literature review with `--related`
+
+---
+
+## 📖 Full Documentation
+
+- `README.md` - System architecture overview
+- `USAGE.md` - Detailed usage instructions
+- `ACADEMIC_USAGE.md` - Dedicated academic writing guide
+- `QUICK_START.md` - Quick start

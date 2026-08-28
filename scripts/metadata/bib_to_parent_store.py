@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""bib_to_parent_store.py — 从 My Library.bib 抽 DOI 灌回 parent_store。
+"""bib_to_parent_store.py — pull DOIs from My Library.bib back into parent_store.
 
-不动 paper content (那是 paper 内被引文献, 不该改)。
-只改 meta.doi 字段 (bib_rag 实际查的字段)。
+Never touches paper content (that is literature cited *inside* papers — not ours
+to change). Only rewrites the meta.doi field (the one bib_rag actually queries).
 
-按 Coding Principles #3 Surgical: 默认 dry-run, 必须 user 显式 --apply 才写盘。
+Follows Coding Principles #3 Surgical: dry-run by default; only an explicit
+--apply writes to disk.
 
-按 SOUL.md Honesty Protocol:
-- 不假装匹配: 找不到的 entry 标 unmatched 不写
-- 找到的 entry 必须三重匹配 (lastname + year + title prefix) 才信任
-- 三重不匹配的 entry 标 low_confidence, 也可写但有警告
+Follows the SOUL.md Honesty Protocol:
+- never fake a match: entries with no counterpart are marked unmatched, nothing written
+- a matched entry must pass triple matching (lastname + year + title prefix) to be trusted
+- entries failing the triple check are marked low_confidence: written with a warning, or skipped
 """
 import json
 import re
@@ -43,11 +44,11 @@ MATCH_LOG = Path(_CFG["data_dir"]) / "bib_to_parent_store_log.json"
 
 
 def match_paper_to_entry(paper_key, bib_entries, paper_abstract_norm=''):
-    """三重匹配: (lastname, year) + title prefix 重叠
-    第四维度 (可选): paper abstract vs bib abstract 重叠 (消歧 multi_match)
+    """Triple match: (lastname, year) + title prefix overlap.
+    Optional fourth dimension: paper abstract vs bib abstract overlap (disambiguates multi_match).
 
-    双方 lastname 都 normalize 后再比较 — filename 里的 `Boström`、`Abdul-Wajid`、
-    `Abou_Chakra` 才能对上 .bib 里的 `bostrom` / `abdulwajid` / `abouchakra`。
+    Both lastnames are normalized before comparison — so `Boström`, `Abdul-Wajid`,
+    `Abou_Chakra` in filenames match `bostrom` / `abdulwajid` / `abouchakra` in the .bib.
     """
     paper_lastname, paper_year, paper_title_norm = paper_key
     if not paper_year: return None, 'no_year'
@@ -58,39 +59,39 @@ def match_paper_to_entry(paper_key, bib_entries, paper_abstract_norm=''):
         if not be['doi']: continue
         if be['author_norm'] != paper_lastname_norm: continue
         if be['year'] != paper_year: continue
-        # title 重叠 (paper_title_norm 是 bib title 前 50 char normalize)
+        # title overlap (paper_title_norm is the bib title's first 50 chars, normalized)
         bib_title_norm = be['title_norm']
         if not bib_title_norm or not paper_title_norm: continue
-        # Jaccard-like 重叠: bib title 前 30 char 必须出现在 paper title
+        # Jaccard-like overlap: the bib title's first 30 chars must appear in the paper title
         if bib_title_norm[:25] in paper_title_norm or paper_title_norm[:25] in bib_title_norm:
             candidates.append(be)
 
     if not candidates: return None, 'no_match'
     if len(candidates) == 1:
         return candidates[0], 'matched'
-    # multi_match: 用 (title overlap + abstract overlap) 加权评分消歧
+    # multi_match: disambiguate with weighted (title overlap + abstract overlap) scoring
     def score(be):
         title_score = len(set(be['title_norm'][:25]) & set(paper_title_norm[:25]))
-        # abstract 重叠 (如果有)
+        # abstract overlap (when available)
         abstract_score = 0
         if paper_abstract_norm and be.get('abstract_norm'):
             bib_abs_norm = be['abstract_norm']
             if bib_abs_norm[:30] in paper_abstract_norm or paper_abstract_norm[:30] in bib_abs_norm:
-                abstract_score = 10  # abstract overlap 权重高 (消歧信号强)
+                abstract_score = 10  # abstract overlap carries high weight (strong disambiguation signal)
         return title_score + abstract_score
     best = max(candidates, key=score)
     return best, 'multi_match'
 
 
 def match_paper_by_title(paper_title, paper_year, bib_entries, year_tolerance=1, paper_abstract_norm=''):
-    """Step 3: title 反向搜 .bib (no_match fallback)
+    """Step 3: reverse-search the .bib by title (no_match fallback).
 
-    Fix 3: year_tolerance=1 (paper year ±1, 容 Adelmann 2022 → adelmann_impact_2023 case)
-    Fix 6: title prefix 改 [:20] (从 [:30]) 更宽容, 容 title 截断不同位置
-    Fix 7: paper_abstract_norm 加权 (multi_match 消歧)
-    用 paper.meta.title (完整 title) 匹配 .bib entry title
-    置信度: title normalize[:20] 必须出现在 bib title normalize 里 (双向)
-    返回 (entry, status): status in (title_matched, multi_match, no_match)
+    Fix 3: year_tolerance=1 (paper year ±1, covers Adelmann 2022 → adelmann_impact_2023)
+    Fix 6: title prefix widened to [:20] (from [:30]) to tolerate truncation at different offsets
+    Fix 7: paper_abstract_norm weighting (multi_match disambiguation)
+    Matches paper.meta.title (full title) against the .bib entry title.
+    Confidence: normalized title[:20] must appear in the normalized bib title (both directions).
+    Returns (entry, status): status in (title_matched, multi_match, no_match)
     """
     if not paper_title or len(paper_title) < 15:
         return None, 'title_too_short'
@@ -99,7 +100,7 @@ def match_paper_by_title(paper_title, paper_year, bib_entries, year_tolerance=1,
     candidates = []
     for be in bib_entries:
         if not be['doi']: continue
-        # year 容差匹配 (Fix 3)
+        # year matching with tolerance (Fix 3)
         if paper_year and be['year']:
             try:
                 year_diff = abs(int(paper_year) - int(be['year']))
@@ -110,17 +111,17 @@ def match_paper_by_title(paper_title, paper_year, bib_entries, year_tolerance=1,
                     continue
         bib_title_norm = be['title_norm']
         if not bib_title_norm or not paper_title_norm: continue
-        # Fix 6: 双向 title prefix 重叠 ([:20] 更宽容)
+        # Fix 6: bidirectional title-prefix overlap ([:20], more tolerant)
         if bib_title_norm[:20] in paper_title_norm or paper_title_norm[:20] in bib_title_norm:
             candidates.append(be)
 
     if not candidates: return None, 'no_match'
     if len(candidates) == 1:
         return candidates[0], 'title_matched'
-    # Fix 7: 多候选: title 相似度 + abstract 加权 (paper abstract 加进消歧)
+    # Fix 7: multiple candidates — title similarity + abstract weighting
     def score(be):
         title_score = len(set(be['title_norm'][:20]) & set(paper_title_norm[:20]))
-        # abstract 重叠
+        # abstract overlap
         abstract_score = 0
         if paper_abstract_norm and be.get('abstract_norm'):
             bib_abs_norm = be['abstract_norm']
@@ -132,18 +133,20 @@ def match_paper_by_title(paper_title, paper_year, bib_entries, year_tolerance=1,
 
 
 def normalize_paper_title(title):
-    """去掉 paper meta.title 前缀 (常见格式: `Lastname et al. - YEAR - <title>` 或 `https://doi.org/...` 异常)
+    """Strip common meta.title prefixes (`Lastname et al. - YEAR - <title>` or
+    `https://doi.org/...` anomalies).
 
-    逻辑在 bib_utils.strip_author_year_prefix (还处理 `YYYY - ` 前缀, 兼容
-    filename-as-title 的情况)。
+    Logic lives in bib_utils.strip_author_year_prefix (also handles `YYYY - `
+    prefixes and filename-as-title cases).
     """
     return strip_author_year_prefix(title)
 
 
 def extract_year_from_paper_content(fp):
-    """Fix 5: 从 paper content 抽 year (filename 缺 year 时的兜底)
+    """Fix 5: pull the year from paper content (fallback when the filename lacks one).
 
-    逻辑在 bib_utils.extract_year_from_content; 这里只负责读 JSON + 类型检查。
+    Logic lives in bib_utils.extract_year_from_content; this only reads JSON +
+    type-checks.
     """
     try:
         data = json.loads(fp.read_text())
@@ -155,9 +158,10 @@ def extract_year_from_paper_content(fp):
 
 
 def get_paper_meta(fp):
-    """从 parent_store .json 抽 meta.title, meta.year, abstract (for disambiguation)
+    """Extract meta.title, meta.year and abstract from a parent_store .json (for disambiguation).
 
-    title 经过 normalize_paper_title 去掉 `Lastname et al. - YEAR -` 前缀 (Fix 1)
+    The title passes through normalize_paper_title to strip the
+    `Lastname et al. - YEAR -` prefix (Fix 1).
     """
     try:
         data = json.loads(fp.read_text())
@@ -173,14 +177,14 @@ def get_paper_meta(fp):
                 title = normalize_paper_title(meta['title'])
             if meta.get('year') and not year:
                 year = meta['year']
-            # abstract: 看 content 里 ## Abstract / ## Summary / ## Research briefing 段落
+            # abstract: look for a ## Abstract / ## Summary / ## Research briefing section in content
             if not abstract:
                 c = sec.get('content', '')
-                # 优先 ## Abstract
+                # prefer ## Abstract
                 m = re.search(r'(?si)##\s*\*?\*?(?:Abstract|Summary|Background|Introduction|Research\s+briefing)[:\s]*\n*(.*?)(?=\n##\s|\Z)', c)
                 if m:
                     candidate = m.group(1).strip()
-                    if len(candidate) > 100:  # 至少 100 chars 算 abstract
+                    if len(candidate) > 100:  # need at least 100 chars to count as abstract
                         abstract = candidate
     return title, year, abstract
 
@@ -189,9 +193,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--bib', type=Path, default=BIB_PATH, help='My Library.bib path')
     ap.add_argument('--parent-dir', type=Path, default=PARENT_STORE, help='parent_store dir')
-    ap.add_argument('--dry-run', action='store_true', help='只看, 不改 parent_store')
-    ap.add_argument('--apply', action='store_true', help='实际改 parent_store (备份原 .json 到 BACKUP_DIR)')
-    ap.add_argument('--low-confidence', action='store_true', help='写三重不匹配的 entry (默认不写)')
+    ap.add_argument('--dry-run', action='store_true', help='inspect only; never modify parent_store')
+    ap.add_argument('--apply', action='store_true', help='modify parent_store (backs up originals to BACKUP_DIR)')
+    ap.add_argument('--low-confidence', action='store_true', help='also write entries failing the triple match (skipped by default)')
     args = ap.parse_args()
 
     if not args.dry_run and not args.apply:
@@ -204,7 +208,7 @@ def main():
         print(f'[bib_to_parent_store] ERROR: parent dir not found: {args.parent_dir}')
         return 1
 
-    # 备份目录
+    # backup dir
     if args.apply:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -214,7 +218,7 @@ def main():
     with_doi = [be for be in bib_entries if be['doi']]
     print(f'[bib_to_parent_store] {len(bib_entries)} entries, {len(with_doi)} with DOI')
 
-    # 扫 parent_store
+    # scan parent_store
     print(f'[bib_to_parent_store] scanning {args.parent_dir}')
     matched_count = 0
     written_count = 0
@@ -224,7 +228,7 @@ def main():
 
     for fp in sorted(args.parent_dir.glob('*.json')):
         paper_key = filename_to_key(fp.stem)
-        # Fix 5: filename 缺 year 时, 从 paper content 抽 year 充补
+        # Fix 5: when the filename lacks a year, pull one from paper content
         if paper_key and not paper_key[1]:
             content_year = extract_year_from_paper_content(fp)
             if content_year:
@@ -233,7 +237,7 @@ def main():
         confidence = None
         status = None
 
-        # 抽 paper metadata (包括 abstract, 用于 multi_match 消歧)
+        # extract paper metadata (abstract included, for multi_match disambiguation)
         paper_title, paper_year, paper_abstract = get_paper_meta(fp)
         paper_abstract_norm = normalize(paper_abstract[:200]) if paper_abstract else ''
 
@@ -244,12 +248,12 @@ def main():
 
         # Step 3: fallback to title reverse search (no_match only)
         if not entry:
-            # 用 year from filename key (if available) or paper meta.year
+            # use the year from the filename key (if available) or paper meta.year
             year_hint = paper_key[1] if paper_key else paper_year
             entry, status = match_paper_by_title(paper_title, year_hint, bib_entries, paper_abstract_norm=paper_abstract_norm)
             if entry:
-                confidence = 'low' if status == 'multi_match' else 'medium'  # title-only 置信度比三重匹配低
-                status = f'title_{status}'  # 标记 title-only 来源
+                confidence = 'low' if status == 'multi_match' else 'medium'  # title-only confidence is lower than the triple match
+                status = f'title_{status}'  # mark the title-only provenance
 
         if not entry:
             no_match_count += 1
@@ -284,9 +288,9 @@ def main():
                     for sec in data:
                         meta = sec.get('meta', {})
                         old_doi = meta.get('doi', '')
-                        # 写之前 normalize DOI (去 URL 前缀/尾标点, 与 meta_audit 一致)
+                        # normalize the DOI before writing (strip URL prefix / trailing punctuation, consistent with meta_audit)
                         meta['doi'] = normalize_doi(entry['doi'])
-                        # 升级: 同时写 meta.authors (if bib entry has author)
+                        # upgrade: also write meta.authors (when the bib entry has authors)
                         if entry.get('author_full'):
                             meta['authors'] = entry['author_full']
                         if old_doi and normalize_doi(old_doi) != normalize_doi(entry['doi']):
@@ -297,10 +301,10 @@ def main():
             except Exception as e:
                 log_entry['error'] = str(e)
         if not written:
-            # matched 但未写盘 (dry-run / 置信度不足 / 写盘失败)
+            # matched but not written (dry-run / insufficient confidence / write failure)
             skipped_count += 1
 
-    # 写 log
+    # write log
     log = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'mode': 'apply' if args.apply else 'dry-run',

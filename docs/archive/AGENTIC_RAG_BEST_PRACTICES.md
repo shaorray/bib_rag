@@ -1,70 +1,70 @@
 > **Status note (2026-08-27):** design principles and golden parameters are the basis of the current agentic pipeline (src/agent_*.py). Deployment snippets referencing openclaw.json are historical — the current entry point is `agentic_query.py` (see ../README.md).
 
-# Agentic RAG 最佳实践学习报告 (2026 工业级标准)
+# Agentic RAG Best Practices Study Report (2026 Industry-Grade Standard)
 
-**学习日期**: 2026-03-28  
-**来源**: 2026 年 Agentic RAG 完整配置流程 + 操作手册  
-**状态**: ✅ 已学习，待实施
+**Study date**: 2026-03-28  
+**Source**: Complete 2026 Agentic RAG configuration workflow + operations manual  
+**Status**: ✅ Studied, pending implementation
 
 ---
 
-## 📚 核心架构学习
+## 📚 Core Architecture Study
 
-### 最优架构（准确率最高、最稳定）
+### Optimal Architecture (Highest Accuracy, Most Stable)
 
 ```
 Query → Planner → Retriever → Reflector → Generator → Output
               ↓         ↑
-              └─────────┘ (最多 3 轮迭代)
+              └─────────┘ (up to 3 iterations)
 ```
 
-### 四大核心 Agent（缺一不可）
+### The Four Core Agents (All Essential)
 
-| Agent | 职责 | 推荐模型 | 关键 Prompt |
+| Agent | Responsibility | Recommended Model | Key Prompt |
 |-------|------|----------|-------------|
-| **Planner** | 拆解问题、生成子问题、规划步骤 | Qwen3.5-14B | "拆解为 3-5 个子问题" |
-| **Retriever** | 多源检索、判断是否需要继续查 | Qwen3.5-14B | "是否需要补充检索" |
-| **Reflector** | 校验答案、防幻觉、决定重查 | Llama3.1-70B | "打分 0-1，≥0.8 生成" |
-| **Generator** | 最终合成、结构化输出 | Qwen3.5-14B | "基于资料写报告" |
+| **Planner** | Decompose the question, generate sub-questions, plan steps | Qwen3.5-14B | "Decompose into 3-5 sub-questions" |
+| **Retriever** | Multi-source retrieval, decide whether further search is needed | Qwen3.5-14B | "Is additional retrieval needed" |
+| **Reflector** | Verify answers, prevent hallucination, decide whether to re-search | Llama3.1-70B | "Score 0-1, generate if ≥0.8" |
+| **Generator** | Final synthesis, structured output | Qwen3.5-14B | "Write the report based on the material" |
 
 ---
 
-## 🔧 当前实现 vs 最佳实践对比
+## 🔧 Current Implementation vs Best Practices Comparison
 
-| 维度 | 当前实现 | 最佳实践 | 差距 | 优先级 |
+| Dimension | Current Implementation | Best Practice | Gap | Priority |
 |------|---------|---------|------|--------|
-| **架构** | Self-RAG + Multi-Hop | Planner→Retriever→Reflector→Generator | ⚠️ 中 | 高 |
-| **Agent 数** | 2 (Self-RAG + Multi-Hop) | 4 (Planner/Retriever/Reflector/Generator) | ⚠️ 缺 2 个 | 高 |
-| **迭代控制** | max_retries=2 | max_iterations=3 | ✅ 接近 | 低 |
-| **检索阈值** | 0.15 (similarity) | 0.75 (score_threshold) | ❌ 过低 | 高 |
-| **反思阈值** | 无 | 0.8 (reflection_threshold) | ❌ 缺失 | 高 |
-| **分块策略** | 未优化 | 1024 字符 + 256 重叠 | ❌ 未实现 | 中 |
-| **向量库** | ChromaDB | Qdrant | ⚠️ 功能弱 | 中 |
-| **Embedding** | all-MiniLM-L6-v2 | nomic-embed-text | ⚠️ 性能弱 | 中 |
-| **LLM** | qwen3.5:397b-cloud | qwen3.5:14b (本地) | ✅ Cloud 版更强 | 低 |
-| **长文档压缩** | 无 | 二级摘要 + 滑动窗口 | ❌ 缺失 | 中 |
+| **Architecture** | Self-RAG + Multi-Hop | Planner→Retriever→Reflector→Generator | ⚠️ Medium | High |
+| **Agent count** | 2 (Self-RAG + Multi-Hop) | 4 (Planner/Retriever/Reflector/Generator) | ⚠️ Missing 2 | High |
+| **Iteration control** | max_retries=2 | max_iterations=3 | ✅ Close | Low |
+| **Retrieval threshold** | 0.15 (similarity) | 0.75 (score_threshold) | ❌ Too low | High |
+| **Reflection threshold** | None | 0.8 (reflection_threshold) | ❌ Missing | High |
+| **Chunking strategy** | Not optimized | 1024 characters + 256 overlap | ❌ Not implemented | Medium |
+| **Vector store** | ChromaDB | Qdrant | ⚠️ Weak features | Medium |
+| **Embedding** | all-MiniLM-L6-v2 | nomic-embed-text | ⚠️ Weak performance | Medium |
+| **LLM** | qwen3.5:397b-cloud | qwen3.5:14b (local) | ✅ Cloud version is stronger | Low |
+| **Long-document compression** | None | Two-level summarization + sliding window | ❌ Missing | Medium |
 
 ---
 
-## 🎯 关键参数学习（黄金参数）
+## 🎯 Key Parameters Study (Golden Parameters)
 
-| 参数 | 最佳值 | 当前值 | 调整建议 |
+| Parameter | Best Value | Current Value | Adjustment Suggestion |
 |------|--------|--------|---------|
-| **max_iterations** | 3 | 2 | 调整为 3 |
-| **top_k** | 10 | 8 | 调整为 10 |
-| **similarity_threshold** | 0.75 | 0.15 | **大幅调整** |
-| **reflection_threshold** | 0.8 | 无 | **新增** |
-| **chunk_size** | 1024 | 未设置 | **新增** |
-| **chunk_overlap** | 256 | 未设置 | **新增** |
-| **temperature** | 0.1 | 0.0 | 调整为 0.1 |
-| **max_tokens** | 8192 | 默认 | 显式设置 |
-| **timeout** | 120s | 60s | 调整为 120 |
+| **max_iterations** | 3 | 2 | Adjust to 3 |
+| **top_k** | 10 | 8 | Adjust to 10 |
+| **similarity_threshold** | 0.75 | 0.15 | **Major adjustment** |
+| **reflection_threshold** | 0.8 | None | **Add new** |
+| **chunk_size** | 1024 | Not set | **Add new** |
+| **chunk_overlap** | 256 | Not set | **Add new** |
+| **temperature** | 0.1 | 0.0 | Adjust to 0.1 |
+| **max_tokens** | 8192 | Default | Set explicitly |
+| **timeout** | 120s | 60s | Adjust to 120 |
 
 ---
 
-## 📦 部署配置学习
+## 📦 Deployment Configuration Study
 
-### OpenClaw 配置 (openclaw.json)
+### OpenClaw Configuration (openclaw.json)
 
 ```json
 {
@@ -83,7 +83,7 @@ Query → Planner → Retriever → Reflector → Generator → Output
 }
 ```
 
-### Agentic RAG 配置
+### Agentic RAG Configuration
 
 ```json
 {
@@ -91,22 +91,22 @@ Query → Planner → Retriever → Reflector → Generator → Output
     {
       "name": "Planner",
       "model": "qwen3.5:14b",
-      "role": "拆解问题、生成子查询、控制迭代次数≤3"
+      "role": "Decompose the question, generate sub-queries, cap iterations at ≤3"
     },
     {
       "name": "Retriever",
       "model": "qwen3.5:14b",
-      "role": "向量检索、判断是否需要补充检索"
+      "role": "Vector retrieval, decide whether additional retrieval is needed"
     },
     {
       "name": "Reflector",
       "model": "llama3.1:70b",
-      "role": "校验答案、防幻觉、决定是否重查"
+      "role": "Verify answers, prevent hallucination, decide whether to re-search"
     },
     {
       "name": "Writer",
       "model": "qwen3.5:14b",
-      "role": "结构化输出报告、压缩上下文、防溢出"
+      "role": "Structured report output, context compression, overflow prevention"
     }
   ],
   "memory": {
@@ -124,7 +124,7 @@ Query → Planner → Retriever → Reflector → Generator → Output
 }
 ```
 
-### 长文档压缩配置
+### Long-Document Compression Configuration
 
 ```json
 {
@@ -141,147 +141,147 @@ Query → Planner → Retriever → Reflector → Generator → Output
 
 ---
 
-## 🧠 核心 Prompt 学习
+## 🧠 Core Prompt Study
 
-### Planner Prompt (问题拆解)
-
-```
-你是专业问题规划师。
-将用户问题拆解为 3–5 个可检索的子问题，覆盖所有维度，避免重复。
-输出纯列表，不要多余内容。
-```
-
-### Reflector Prompt (反思校验，防幻觉)
+### Planner Prompt (Question Decomposition)
 
 ```
-你是严格校验官。
-评估当前资料是否足够回答问题，打分 0–1。
-低于 0.8 必须重查；高于 0.8 可生成。
-只输出数字。
+You are a professional question planner.
+Decompose the user's question into 3–5 retrievable sub-questions, covering all dimensions and avoiding duplication.
+Output a plain list only, nothing else.
+```
+
+### Reflector Prompt (Reflective Verification, Anti-Hallucination)
+
+```
+You are a strict verifier.
+Assess whether the current material is sufficient to answer the question; score 0–1.
+Below 0.8, re-search is mandatory; above 0.8, generation may proceed.
+Output only the number.
 ```
 
 ---
 
-## 🔍 关键发现
+## 🔍 Key Findings
 
-### 1. 阈值设置问题
+### 1. Threshold Configuration Problem
 
-**当前问题**: similarity_threshold=0.15 过低
+**Current problem**: similarity_threshold=0.15 is too low
 
-**后果**: 
-- 大量低质量文档被保留
-- 噪声干扰答案生成
-- 置信度虚高
+**Consequences**: 
+- A large amount of low-quality documents is retained
+- Noise interferes with answer generation
+- Confidence is artificially inflated
 
-**改进**: 调整为 0.75，只保留高质量文档
+**Improvement**: Adjust to 0.75, keeping only high-quality documents
 
-### 2. 缺少 Reflector Agent
+### 2. Missing Reflector Agent
 
-**当前问题**: 没有独立的校验环节
+**Current problem**: There is no independent verification step
 
-**后果**:
-- 幻觉无法检测
-- 答案质量不稳定
-- 无法自我修正
+**Consequences**:
+- Hallucinations cannot be detected
+- Answer quality is inconsistent
+- No self-correction is possible
 
-**改进**: 添加 Reflector Agent，使用 Llama3.1-70B 校验
+**Improvement**: Add a Reflector Agent using Llama3.1-70B for verification
 
-### 3. 缺少长文档处理
+### 3. Missing Long-Document Handling
 
-**当前问题**: 无分块/压缩策略
+**Current problem**: No chunking/compression strategy
 
-**后果**:
-- 大文档无法处理
-- 上下文溢出
-- 检索效率低
+**Consequences**:
+- Large documents cannot be processed
+- Context overflows
+- Retrieval efficiency is low
 
-**改进**: 实现 1024/256 分块 + 二级摘要压缩
+**Improvement**: Implement 1024/256 chunking + two-level summary compression
 
-### 4. 迭代控制不足
+### 4. Insufficient Iteration Control
 
-**当前问题**: max_retries=2 可能不足
+**Current problem**: max_retries=2 may not be enough
 
-**改进**: 调整为 3 轮，添加 early_stopping
-
----
-
-## 🚀 改进计划
-
-### 阶段 1: 参数调优 (高优先级，1 天)
-
-- [ ] 调整 similarity_threshold: 0.15 → 0.75
-- [ ] 添加 reflection_threshold: 0.8
-- [ ] 调整 max_iterations: 2 → 3
-- [ ] 调整 top_k: 8 → 10
-- [ ] 调整 temperature: 0.0 → 0.1
-
-### 阶段 2: Reflector Agent (高优先级，2 天)
-
-- [ ] 创建 `reflector_agent.py`
-- [ ] 实现答案校验逻辑
-- [ ] 集成到工作流
-- [ ] 测试防幻觉效果
-
-### 阶段 3: Planner Agent (中优先级，2 天)
-
-- [ ] 创建 `planner_agent.py`
-- [ ] 实现问题拆解逻辑
-- [ ] 替代现有 Multi-Hop 分解
-- [ ] 测试拆解质量
-
-### 阶段 4: 长文档处理 (中优先级，3 天)
-
-- [ ] 实现 1024/256 分块
-- [ ] 实现二级摘要压缩
-- [ ] 实现滑动窗口
-- [ ] 测试 30 万字文档
-
-### 阶段 5: 配置优化 (低优先级，1 天)
-
-- [ ] 更新 openclaw.json
-- [ ] 更新 production_workflow.py
-- [ ] 创建配置文档
-- [ ] 性能基准测试
+**Improvement**: Adjust to 3 iterations and add early_stopping
 
 ---
 
-## 📊 预期收益
+## 🚀 Improvement Plan
 
-| 指标 | 当前 | 预期改进后 | 提升 |
+### Phase 1: Parameter Tuning (High priority, 1 day)
+
+- [ ] Adjust similarity_threshold: 0.15 → 0.75
+- [ ] Add reflection_threshold: 0.8
+- [ ] Adjust max_iterations: 2 → 3
+- [ ] Adjust top_k: 8 → 10
+- [ ] Adjust temperature: 0.0 → 0.1
+
+### Phase 2: Reflector Agent (High priority, 2 days)
+
+- [ ] Create `reflector_agent.py`
+- [ ] Implement answer-verification logic
+- [ ] Integrate into the workflow
+- [ ] Test anti-hallucination effectiveness
+
+### Phase 3: Planner Agent (Medium priority, 2 days)
+
+- [ ] Create `planner_agent.py`
+- [ ] Implement question-decomposition logic
+- [ ] Replace the existing Multi-Hop decomposition
+- [ ] Test decomposition quality
+
+### Phase 4: Long-Document Handling (Medium priority, 3 days)
+
+- [ ] Implement 1024/256 chunking
+- [ ] Implement two-level summary compression
+- [ ] Implement sliding window
+- [ ] Test with a 300,000-character document
+
+### Phase 5: Configuration Optimization (Low priority, 1 day)
+
+- [ ] Update openclaw.json
+- [ ] Update production_workflow.py
+- [ ] Create configuration documentation
+- [ ] Run performance benchmarks
+
+---
+
+## 📊 Expected Benefits
+
+| Metric | Current | Expected After Improvement | Gain |
 |------|------|-----------|------|
-| **答案准确率** | ~70% | ~85% | +15% |
-| **幻觉率** | ~15% | ~5% | -10% |
-| **复杂查询处理** | ~60% | ~80% | +20% |
-| **长文档支持** | ❌ | ✅ 30 万字 | +100% |
-| **迭代效率** | 2 轮 | 3 轮 + 早停 | +50% |
+| **Answer accuracy** | ~70% | ~85% | +15% |
+| **Hallucination rate** | ~15% | ~5% | -10% |
+| **Complex query handling** | ~60% | ~80% | +20% |
+| **Long-document support** | ❌ | ✅ 300,000 characters | +100% |
+| **Iteration efficiency** | 2 iterations | 3 iterations + early stopping | +50% |
 
 ---
 
-## 📁 参考资源
+## 📁 Reference Resources
 
-1. **LangGraph 工业级配置**: 最稳、最通用
-2. **OpenClaw 本地 Agentic RAG**: 适配本地环境
-3. **Qdrant 向量库**: 比 FAISS 强，支持过滤/元数据/多租户
-4. **nomic-embed-text**: 最强开源嵌入模型
-5. **Qwen3.5-14B**: 效果最好的本地 LLM
-
----
-
-## ✅ 学习总结
-
-**核心收获**:
-1. 四 Agent 架构是工业级标准 (Planner→Retriever→Reflector→Generator)
-2. 阈值设置至关重要 (0.75 检索，0.8 反思)
-3. 长文档必须分层压缩 (1024/256 + 二级摘要)
-4. Multi-Agent 比单 Agent 准确率提升 35-50%
-
-**下一步行动**:
-1. 立即调整黄金参数
-2. 实现 Reflector Agent
-3. 测试长文档处理
+1. **LangGraph industrial-grade configuration**: Most stable and most general
+2. **OpenClaw local Agentic RAG**: Fits local environments
+3. **Qdrant vector store**: Stronger than FAISS, supports filtering/metadata/multi-tenancy
+4. **nomic-embed-text**: The strongest open-source embedding model
+5. **Qwen3.5-14B**: The best-performing local LLM
 
 ---
 
-**学习完成时间**: 2026-03-28  
-**实施开始时间**: 立即  
-**预计完成时间**: 2026-04-04 (1 周)
+## ✅ Study Summary
+
+**Core takeaways**:
+1. The four-agent architecture is the industry-grade standard (Planner→Retriever→Reflector→Generator)
+2. Threshold settings are critical (0.75 for retrieval, 0.8 for reflection)
+3. Long documents must be compressed hierarchically (1024/256 + two-level summarization)
+4. Multi-Agent improves accuracy by 35-50% over a single Agent
+
+**Next steps**:
+1. Adjust the golden parameters immediately
+2. Implement the Reflector Agent
+3. Test long-document handling
+
+---
+
+**Study completed**: 2026-03-28  
+**Implementation started**: Immediately  
+**Estimated completion**: 2026-04-04 (1 week)

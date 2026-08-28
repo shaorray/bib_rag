@@ -47,8 +47,8 @@ TOPIC_EXAMPLES = [
 TOPIC_EXAMPLES_JSON = json.dumps(TOPIC_EXAMPLES, ensure_ascii=False)
 
 PROMPT = f"""You are a scientific paper classifier. Given paper titles and abstracts, classify each into:
-- article_type: one of "review" (综述/survey/overview/perspective), "experimental"
-  (实验研究), "methods" (方法学/工具/benchmark/计算流程).
+- article_type: one of "review" (survey/overview/perspective), "experimental"
+  (hypothesis-driven lab research), "methods" (protocols/tools/benchmark/computational workflows).
 - topics: a LIST of 3 to 5 concise keywords capturing the paper's biological/technical
   themes. This is an OPEN vocabulary — invent accurate keywords as needed; do not force
   a paper into a topic that does not fit.
@@ -171,7 +171,7 @@ def main():
 
     if args.limit:
         papers = papers[:args.limit]
-    print(f"待分类: {len(papers)} 篇 (已跳过 {len(done_set)})", file=sys.stderr)
+    print(f"to classify: {len(papers)} papers ({len(done_set)} done, skipped)", file=sys.stderr)
 
     new_file = not os.path.exists(args.resume)
     fh = open(args.resume, "a", newline="", encoding="utf-8")
@@ -214,8 +214,8 @@ def main():
                   file=sys.stderr)
 
     fh.close()
-    print(f"完成: {done} 篇, {errs} 错误, 总耗时 {time.time()-t0:.0f}s", file=sys.stderr)
-    print(f"结果: {args.resume}")
+    print(f"done: {done} papers, {errs} errors, {time.time()-t0:.0f}s total", file=sys.stderr)
+    print(f"results: {args.resume}")
 
 
 if __name__ == "__main__":

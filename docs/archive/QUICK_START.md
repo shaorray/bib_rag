@@ -1,25 +1,25 @@
-# Agentic RAG 快速开始
+# Agentic RAG Quick Start
 
-## 知识库状态
+## Knowledge Base Status
 
-✅ **已构建完成** - 199 篇 Eph/Ephrin 论文，388 个文档块
+✅ **Build complete** - 199 Eph/Ephrin papers, 388 document chunks
 
-## 立即使用
+## Use It Now
 
 ```bash
 cd /Disk_2/claw_working_dir/ephrin_agentic_rag
 
-# 交互式查询
+# Interactive query
 python3 query_interface.py
 
-# 单查询示例
+# Single query example
 python3 query_interface.py -q "cis interaction Eph"
 
-# 多跳推理
+# Multi-hop reasoning
 python3 query_interface.py --multihop -q "Compare forward and reverse signaling"
 ```
 
-## 示例查询
+## Example Query
 
 ```
 ❓ Query: Eph receptor evolution
@@ -36,20 +36,20 @@ python3 query_interface.py --multihop -q "Compare forward and reverse signaling"
 🔍 Retrieved: 8 docs
 ```
 
-## 文件说明
+## File Descriptions
 
-| 文件 | 用途 |
-|------|------|
-| `build_knowledge_base.py` | 重建知识库 |
-| `query_interface.py` | 交互式查询 |
-| `rag_core.py` | 核心 RAG 组件 |
-| `agentic_workflow.py` | Agentic RAG 逻辑 |
-| `chroma_db/ephrin_papers.pkl` | 向量数据库 (3MB) |
+| File | Purpose |
+|------|---------|
+| `build_knowledge_base.py` | Rebuild the knowledge base |
+| `query_interface.py` | Interactive queries |
+| `rag_core.py` | Core RAG components |
+| `agentic_workflow.py` | Agentic RAG logic |
+| `chroma_db/ephrin_papers.pkl` | Vector database (3MB) |
 
-## 特性
+## Features
 
-- ✅ Self-RAG: 自我评估相关性
-- ✅ CRAG: 查询重写与重试
-- ✅ Multi-hop: 复杂查询分解
-- ✅ 持久化存储
-- 📦 199 篇论文 / 388 文档块
+- ✅ Self-RAG: Self-assessment of relevance
+- ✅ CRAG: Query rewriting and retry
+- ✅ Multi-hop: Complex query decomposition
+- ✅ Persistent storage
+- 📦 199 papers / 388 document chunks

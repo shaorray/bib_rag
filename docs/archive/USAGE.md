@@ -1,33 +1,33 @@
-# Agentic RAG 使用手册 (2026 工业级标准)
+# Agentic RAG User Manual (2026 Industry-Grade Standard)
 
-**版本**: 2.0.0  
-**更新日期**: 2026-03-28  
-**状态**: ✅ 生产就绪
-
----
-
-## 📚 目录
-
-1. [快速开始](#快速开始)
-2. [架构说明](#架构说明)
-3. [配置参数](#配置参数)
-4. [使用示例](#使用示例)
-5. [API 参考](#api-参考)
-6. [最佳实践](#最佳实践)
-7. [故障排除](#故障排除)
+**Version**: 2.0.0  
+**Last Updated**: 2026-03-28  
+**Status**: ✅ Production Ready
 
 ---
 
-## 🚀 快速开始
+## 📚 Table of Contents
 
-### 1. 安装依赖
+1. [Quick Start](#quick-start)
+2. [Architecture Overview](#architecture-overview)
+3. [Configuration Parameters](#configuration-parameters)
+4. [Usage Examples](#usage-examples)
+5. [API Reference](#api-reference)
+6. [Best Practices](#best-practices)
+7. [Troubleshooting](#troubleshooting)
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install Dependencies
 
 ```bash
-# 已安装，无需额外操作
+# Already installed, no extra action needed
 pip install requests langchain langchain-community
 ```
 
-### 2. 加载知识库
+### 2. Load the Knowledge Base
 
 ```python
 from rag_core import SimpleEmbedding, DocumentStore
@@ -43,63 +43,63 @@ def retriever(query, k=10):
     return doc_store.query(emb, n_results=k)
 ```
 
-### 3. 运行 Agentic RAG
+### 3. Run Agentic RAG
 
 ```python
 from agentic_rag_workflow import AgenticRAGWorkflow
 
 workflow = AgenticRAGWorkflow(retriever, model="qwen3.5:397b-cloud")
 
-result = workflow.run("EphA2 与 EphB4 在癌症中的功能差异？")
+result = workflow.run("What are the functional differences between EphA2 and EphB4 in cancer?")
 
-print(f"答案：{result['answer']}")
-print(f"置信度：{result['reflect_score']:.2f}")
-print(f"状态：{result['status']}")
+print(f"Answer: {result['answer']}")
+print(f"Confidence: {result['reflect_score']:.2f}")
+print(f"Status: {result['status']}")
 ```
 
 ---
 
-## 🏗️ 架构说明
+## 🏗️ Architecture Overview
 
-### 完整工作流
+### Complete Workflow
 
 ```
 Query → Planner → Retriever → Generator → Reflector → Output
                               ↑                    ↓
-                              └──── 重查 (if <0.8) ──┘
+                              └──── Re-retrieve (if <0.8) ──┘
 ```
 
-### 四大核心 Agent
+### The Four Core Agents
 
-| Agent | 职责 | 关键功能 |
+| Agent | Role | Key Features |
 |-------|------|---------|
-| **Planner** | 拆解问题 | 3-5 个子问题、检索策略 |
-| **Retriever** | 向量检索 | 相似度 0.75+、top_k=10 |
-| **Generator** | 生成答案 | 基于文档、防幻觉 |
-| **Reflector** | 校验答案 | 打分 0-1、≥0.8 输出 |
+| **Planner** | Decompose questions | 3-5 sub-queries, retrieval strategy |
+| **Retriever** | Vector retrieval | Similarity 0.75+, top_k=10 |
+| **Generator** | Generate answers | Grounded in documents, hallucination-resistant |
+| **Reflector** | Validate answers | Score 0-1, output if ≥0.8 |
 
 ---
 
-## ⚙️ 配置参数
+## ⚙️ Configuration Parameters
 
-### 黄金参数 (已优化)
+### Golden Parameters (Already Optimized)
 
 ```python
 GOLDEN_PARAMS = {
-    "similarity_threshold": 0.75,  # 检索阈值
-    "reflection_threshold": 0.8,   # 反思阈值
-    "max_iterations": 3,           # 最大迭代
-    "top_k": 10,                   # 检索数量
-    "max_sub_queries": 5,          # 最大子问题
-    "temperature": 0.1,            # LLM 温度
-    "timeout": 120,                # 超时 (秒)
-    "model": "qwen3.5:397b-cloud"  # 模型
+    "similarity_threshold": 0.75,  # Retrieval threshold
+    "reflection_threshold": 0.8,   # Reflection threshold
+    "max_iterations": 3,           # Max iterations
+    "top_k": 10,                   # Number of retrieved documents
+    "max_sub_queries": 5,          # Max sub-queries
+    "temperature": 0.1,            # LLM temperature
+    "timeout": 120,                # Timeout (seconds)
+    "model": "qwen3.5:397b-cloud"  # Model
 }
 ```
 
-### 配置文件
+### Configuration File
 
-编辑 `agentic_rag_config.json`:
+Edit `agentic_rag_config.json`:
 
 ```json
 {
@@ -121,51 +121,51 @@ GOLDEN_PARAMS = {
 
 ---
 
-## 📖 使用示例
+## 📖 Usage Examples
 
-### 示例 1: 简单查询
+### Example 1: Simple Query
 
 ```python
 from agentic_rag_workflow import AgenticRAGWorkflow
 
 workflow = AgenticRAGWorkflow(retriever)
 
-result = workflow.run("Eph 受体的功能是什么？")
+result = workflow.run("What is the function of Eph receptors?")
 
-print(f"答案：{result['answer'][:500]}")
-print(f"置信度：{result['reflect_score']:.2f}")
+print(f"Answer: {result['answer'][:500]}")
+print(f"Confidence: {result['reflect_score']:.2f}")
 ```
 
-### 示例 2: 复杂查询 (对比)
+### Example 2: Complex Query (Comparison)
 
 ```python
-result = workflow.run("EphA2 与 EphB4 在癌症中的功能差异？")
+result = workflow.run("What are the functional differences between EphA2 and EphB4 in cancer?")
 
-# Planner 会自动拆解为:
-# 1. EphA2 在癌症中的功能
-# 2. EphB4 在癌症中的功能
-# 3. 两者的对比研究
+# The Planner automatically decomposes this into:
+# 1. Function of EphA2 in cancer
+# 2. Function of EphB4 in cancer
+# 3. Comparative studies of the two
 
-print(f"子问题数：{len(result['plan']['sub_queries'])}")
-print(f"检索策略：{result['plan']['search_strategy']}")
+print(f"Number of sub-queries: {len(result['plan']['sub_queries'])}")
+print(f"Retrieval strategy: {result['plan']['search_strategy']}")
 ```
 
-### 示例 3: 复杂查询 (因果)
+### Example 3: Complex Query (Causality)
 
 ```python
-result = workflow.run("cis-interaction 如何影响 trans-signaling？")
+result = workflow.run("How does cis-interaction affect trans-signaling?")
 
-# Planner 会拆解为:
-# 1. cis-interaction 的分子机制
-# 2. trans-signaling 的激活过程
-# 3. 两者的调控关系
+# The Planner decomposes this into:
+# 1. Molecular mechanism of cis-interaction
+# 2. Activation process of trans-signaling
+# 3. Regulatory relationship between the two
 
 if result['reflect_score'] < 0.8:
-    print("需要重查")
-    print(f"建议：{result['suggestions']}")
+    print("Re-retrieval needed")
+    print(f"Suggestions: {result['suggestions']}")
 ```
 
-### 示例 4: 使用 Reflector 独立校验
+### Example 4: Standalone Validation with the Reflector
 
 ```python
 from reflector_agent import ReflectorAgent
@@ -173,49 +173,49 @@ from reflector_agent import ReflectorAgent
 reflector = ReflectorAgent(model="qwen3.5:397b-cloud")
 
 result = reflector.reflect(
-    question="Eph 受体的功能？",
-    answer="Eph 受体是受体酪氨酸激酶",
+    question="What are Eph receptors?",
+    answer="Eph receptors are receptor tyrosine kinases",
     documents=[{"text": "Eph receptors are RTKs...", "similarity": 0.85}]
 )
 
-print(f"分数：{result['score']:.2f}")
-print(f"需要重查：{result['needs_reretrieval']}")
-print(f"问题：{result['issues']}")
+print(f"Score: {result['score']:.2f}")
+print(f"Re-retrieval needed: {result['needs_reretrieval']}")
+print(f"Issues: {result['issues']}")
 ```
 
-### 示例 5: 使用 Planner 拆解问题
+### Example 5: Question Decomposition with the Planner
 
 ```python
 from planner_agent import PlannerAgent
 
 planner = PlannerAgent(model="qwen3.5:397b-cloud")
 
-plan = planner.plan("EphA2 与 EphB4 的功能差异？")
+plan = planner.plan("What are the functional differences between EphA2 and EphB4?")
 
-print(f"复杂度：{'复杂' if plan['is_complex'] else '简单'}")
-print(f"子问题：{len(plan['sub_queries'])}")
+print(f"Complexity: {'Complex' if plan['is_complex'] else 'Simple'}")
+print(f"Sub-queries: {len(plan['sub_queries'])}")
 for sq in plan['sub_queries']:
     print(f"  - {sq['query']}")
 ```
 
 ---
 
-## 🔧 API 参考
+## 🔧 API Reference
 
 ### AgenticRAGWorkflow
 
 ```python
 class AgenticRAGWorkflow:
     def __init__(self, retriever_fn, model="qwen3.5:397b-cloud"):
-        """初始化工作流"""
+        """Initialize the workflow"""
     
     def run(self, query: str, verbose: bool = True) -> dict:
         """
-        运行完整工作流
+        Run the full workflow
         
         Args:
-            query: 用户查询
-            verbose: 是否输出详细日志
+            query: User query
+            verbose: Whether to output detailed logs
             
         Returns:
             {
@@ -231,7 +231,7 @@ class AgenticRAGWorkflow:
         """
     
     def get_stats(self) -> dict:
-        """获取统计信息"""
+        """Get statistics"""
 ```
 
 ### PlannerAgent
@@ -240,11 +240,11 @@ class AgenticRAGWorkflow:
 class PlannerAgent:
     def __init__(self, model="qwen3.5:397b-cloud", 
                  max_sub_queries=5, max_iterations=3):
-        """初始化 Planner"""
+        """Initialize the Planner"""
     
     def plan(self, query: str) -> dict:
         """
-        拆解问题
+        Decompose the question
         
         Returns:
             {
@@ -262,12 +262,12 @@ class PlannerAgent:
 class ReflectorAgent:
     def __init__(self, model="qwen3.5:397b-cloud", 
                  reflection_threshold=0.8):
-        """初始化 Reflector"""
+        """Initialize the Reflector"""
     
     def reflect(self, question: str, answer: str, 
                 documents: List[Dict]) -> dict:
         """
-        校验答案
+        Validate the answer
         
         Returns:
             {
@@ -282,130 +282,130 @@ class ReflectorAgent:
 
 ---
 
-## 📊 最佳实践
+## 📊 Best Practices
 
-### 1. 查询优化
+### 1. Query Optimization
 
-✅ **好的查询**:
-- 具体明确："EphA2 在癌症中的功能？"
-- 包含实体："EphA2 与 EphB4 的差异？"
-- 有上下文："在肿瘤微环境中，Eph 受体的作用？"
+✅ **Good queries**:
+- Specific and clear: "What is the function of EphA2 in cancer?"
+- Include entities: "What are the differences between EphA2 and EphB4?"
+- Provide context: "What role do Eph receptors play in the tumor microenvironment?"
 
-❌ **避免的查询**:
-- 太宽泛："Eph 受体？"
-- 缺少上下文："它的作用？"
-- 多重否定："不是不重要的功能？"
+❌ **Queries to avoid**:
+- Too broad: "Eph receptors?"
+- Missing context: "What does it do?"
+- Multiple negations: "Isn't it not an unimportant function?"
 
-### 2. 参数调优
+### 2. Parameter Tuning
 
-**高准确率场景** (论文写作):
+**High-accuracy scenarios** (paper writing):
 ```python
-similarity_threshold = 0.80  # 提高阈值
-reflection_threshold = 0.85  # 严格要求
+similarity_threshold = 0.80  # Raise the threshold
+reflection_threshold = 0.85  # Strict requirement
 ```
 
-**高召回率场景** (探索性研究):
+**High-recall scenarios** (exploratory research):
 ```python
-similarity_threshold = 0.70  # 降低阈值
-reflection_threshold = 0.75  # 放宽要求
+similarity_threshold = 0.70  # Lower the threshold
+reflection_threshold = 0.75  # Relaxed requirement
 ```
 
-### 3. 性能优化
+### 3. Performance Optimization
 
-**批量处理**:
+**Batch processing**:
 ```python
-queries = ["查询 1", "查询 2", "查询 3"]
+queries = ["Query 1", "Query 2", "Query 3"]
 results = [workflow.run(q, verbose=False) for q in queries]
 ```
 
-**缓存结果**:
+**Caching results**:
 ```python
-# 启用缓存 (已在配置中)
+# Enable caching (already in the config)
 "cache_enabled": true,
 "cache_ttl_seconds": 3600
 ```
 
-### 4. 错误处理
+### 4. Error Handling
 
 ```python
 try:
     result = workflow.run(query)
     if result['status'] == 'needs_reretrieval':
-        print(f"建议重查：{result['suggestions']}")
+        print(f"Re-retrieval suggested: {result['suggestions']}")
 except Exception as e:
-    print(f"错误：{e}")
-    # 回退到简单 RAG
+    print(f"Error: {e}")
+    # Fall back to simple RAG
 ```
 
 ---
 
-## 🔍 故障排除
+## 🔍 Troubleshooting
 
-### 问题 1: 分数总是很低 (<0.5)
+### Issue 1: Scores Are Always Low (<0.5)
 
-**原因**: 检索质量差或答案幻觉
+**Cause**: Poor retrieval quality or hallucinated answers
 
-**解决**:
-1. 检查 `similarity_threshold` 是否过高
-2. 增加 `top_k` 到 15-20
-3. 检查知识库文档质量
+**Solution**:
+1. Check whether `similarity_threshold` is too high
+2. Increase `top_k` to 15-20
+3. Check the quality of knowledge base documents
 
-### 问题 2: Planner 拆解太多子问题
+### Issue 2: The Planner Decomposes into Too Many Sub-queries
 
-**原因**: 查询太复杂
+**Cause**: The query is too complex
 
-**解决**:
-1. 降低 `max_sub_queries` 到 3
-2. 简化原始查询
-3. 使用更具体的术语
+**Solution**:
+1. Lower `max_sub_queries` to 3
+2. Simplify the original query
+3. Use more specific terminology
 
-### 问题 3: 响应时间过长 (>60 秒)
+### Issue 3: Response Time Too Long (>60 seconds)
 
-**原因**: 迭代次数多或文档太多
+**Cause**: Too many iterations or too many documents
 
-**解决**:
-1. 降低 `max_iterations` 到 2
-2. 减少 `top_k` 到 5-8
-3. 启用缓存
+**Solution**:
+1. Lower `max_iterations` to 2
+2. Reduce `top_k` to 5-8
+3. Enable caching
 
-### 问题 4: Ollama 连接失败
+### Issue 4: Ollama Connection Failure
 
-**解决**:
+**Solution**:
 ```bash
-# 检查 Ollama 状态
+# Check Ollama status
 ollama list
 
-# 重启 Ollama
+# Restart Ollama
 systemctl restart ollama
 
-# 测试连接
+# Test the connection
 curl http://localhost:11434/api/tags
 ```
 
 ---
 
-## 📁 文件清单
+## 📁 File List
 
-| 文件 | 说明 |
+| File | Description |
 |------|------|
-| `agentic_rag_workflow.py` | 主工作流 |
+| `agentic_rag_workflow.py` | Main workflow |
 | `planner_agent.py` | Planner Agent |
 | `reflector_agent.py` | Reflector Agent |
-| `self_rag.py` | Self-RAG (黄金参数) |
-| `agentic_rag_config.json` | 配置文件 |
-| `USAGE.md` | 本手册 |
-| `DEPLOYMENT_REPORT.md` | 部署报告 |
+| `self_rag.py` | Self-RAG (golden parameters) |
+| `agentic_rag_config.json` | Configuration file |
+| `USAGE.md` | This manual |
+| `DEPLOYMENT_REPORT.md` | Deployment report |
 
 ---
 
-## 📞 支持
+## 📞 Support
 
-**文档**: `/Disk_2/claw_working_dir/ephrin_agentic_rag/USAGE.md`  
-**配置**: `/Disk_2/claw_working_dir/ephrin_agentic_rag/agentic_rag_config.json`  
-**日志**: `/Disk_2/claw_working_dir/ephrin_agentic_rag/logs/`
+**Docs**: `/Disk_2/claw_working_dir/ephrin_agentic_rag/USAGE.md`  
+**Config**: `/Disk_2/claw_working_dir/ephrin_agentic_rag/agentic_rag_config.json`  
+**Logs**: `/Disk_2/claw_working_dir/ephrin_agentic_rag/logs/`
 
 ---
 
-**版本**: 2.0.0  
-**更新**: 2026-03-28  
-**状态**: ✅ 生产就绪
+**Version**: 2.0.0  
+**Updated**: 2026-03-28  
+**Status**: ✅ Production Ready

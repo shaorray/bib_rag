@@ -50,8 +50,8 @@ TOPICS = [
 TOPIC_VOCAB_JSON = json.dumps(TOPICS, ensure_ascii=False)
 
 PROMPT = f"""You are a scientific paper classifier. Given paper titles, classify each into:
-- article_type: one of "review" (综述/survey/overview/perspective), "experimental"
-  (实验研究), "methods" (方法学/工具/benchmark/计算流程).
+- article_type: one of "review" (survey/overview/perspective), "experimental"
+  (hypothesis-driven lab research), "methods" (protocols/tools/benchmark/computational workflows).
 - topics: a LIST of 3 to 5 keywords selected ONLY from this controlled vocabulary:
 {TOPIC_VOCAB_JSON}
 
@@ -125,7 +125,7 @@ def main():
         if src not in seen:
             seen[src] = {"title": m.get("title", ""), "year": m.get("year", "")}
     papers = list(seen.items())
-    print(f"总论文数: {len(papers)}，抽样 {args.sample} 篇，batch={args.batch}", file=sys.stderr)
+    print(f"total papers: {len(papers)}, sampling {args.sample}, batch={args.batch}", file=sys.stderr)
 
     sample = papers[:args.sample]
     # Clean titles up front, keep alignment with source.
@@ -156,15 +156,15 @@ def main():
         print(f"[batch {bi+1}/{len(batches)}] done {done}/{len(sample_clean)} ({time.time()-t0:.0f}s)", file=sys.stderr)
         time.sleep(0.3)
 
-    print(f"\n=== 分类结果 ({len(results)} 篇, 耗时 {time.time()-t0:.0f}s) ===")
+    print(f"\n=== classification results ({len(results)} papers, {time.time()-t0:.0f}s) ===")
     from collections import Counter
     at = Counter(x.get("article_type", x.get("error", "?")) for x in results)
     tp = Counter()
     for x in results:
         for t in x.get("topics", []):
             tp[t] += 1
-    print("文章类型分布:", dict(at))
-    print("topic 词频 top30:", dict(tp.most_common(30)))
+    print("article_type distribution:", dict(at))
+    print("topic frequency top30:", dict(tp.most_common(30)))
     print("---")
     for r in results:
         at = r.get("article_type", r.get("error", "?"))

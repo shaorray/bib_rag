@@ -2,7 +2,7 @@
 """
 doctor.py — Runtime self-diagnostics for the active bib_rag library.
 
-Borrowed mechanisms (see /Disk_bot/notes/健康检查_横向调研.md):
+Borrowed mechanisms (see the health-check cross-survey notes):
   - research-hub doctor.py: CheckResult dataclass with 4-level status
     (OK/INFO/WARN/FAIL), per-check try/except isolation (one crashing check
     never kills the run), remedy strings attached to every WARN/FAIL,
@@ -388,7 +388,7 @@ def check_doi_quality(cfg: dict, doi_report_path: Optional[str] = None,
         status = WARN
     out = [CheckResult(
         "doi_quality", status, msg,
-        remedy="see notes/eph_rag_doi_问题清单.md; regenerate with --doi-report"
+        remedy="see the DOI issue list in library notes; regenerate with --doi-report"
         if (junk or dup_groups) else "")]
     if junk or dup_groups:
         out[-1].details = (

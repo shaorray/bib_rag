@@ -57,8 +57,8 @@ TOPIC_EXAMPLES = [
 TOPIC_EXAMPLES_JSON = json.dumps(TOPIC_EXAMPLES, ensure_ascii=False)
 
 PROMPT = f"""You are a scientific paper classifier. Given paper titles (optionally with abstracts), classify each into:
-- article_type: one of "review" (综述/survey/overview/perspective), "experimental"
-  (实验研究), "methods" (方法学/工具/benchmark/计算流程).
+- article_type: one of "review" (survey/overview/perspective), "experimental"
+  (hypothesis-driven lab research), "methods" (protocols/tools/benchmark/computational workflows).
 - topics: a LIST of 3 to 5 concise keywords capturing the paper's scientific/technical
   themes. This is an OPEN vocabulary — invent accurate keywords as needed; do not force
   a paper into a topic that does not fit.

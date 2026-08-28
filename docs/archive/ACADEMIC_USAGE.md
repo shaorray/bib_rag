@@ -1,27 +1,27 @@
-# 📝 学术论文写作 - Agentic RAG 调用指南
+# 📝 Academic Paper Writing - Agentic RAG Usage Guide
 
-## 快速开始
+## Quick Start
 
 ```python
-# 在 Python 中导入
+# Import in Python
 import sys
 sys.path.insert(0, '/Disk_2/claw_working_dir/ephrin_agentic_rag')
 from academic_writer import AcademicWritingAssistant
 
-# 初始化助手
+# Initialize the assistant
 assistant = AcademicWritingAssistant()
 ```
 
 ---
 
-## 核心功能
+## Core Features
 
-### 1. 查找引用 (Find References)
+### 1. Find References
 
-**场景**: 写论文时，需要为某个论断找到支持文献
+**Scenario**: While writing a paper, you need to find supporting literature for a claim
 
 ```python
-# 方法 1: Python 代码
+# Method 1: Python code
 citations = assistant.find_references(
     claim="cis interaction inhibits Eph receptor signaling",
     min_relevance=0.15
@@ -31,12 +31,12 @@ for cit in citations:
     print(f"{cit.authors} ({cit.year}). {cit.title}")
 ```
 
-**命令行**:
+**Command line**:
 ```bash
 python3 academic_writer.py --cite "cis interaction inhibits Eph receptor signaling"
 ```
 
-**输出示例**:
+**Example output**:
 ```
 [1] Kao and Kania (2011) - rel: 0.240
     Ephrin-Mediated cis-Attenuation of Eph Receptor Signaling Is Essential...
@@ -47,36 +47,36 @@ python3 academic_writer.py --cite "cis interaction inhibits Eph receptor signali
 
 ---
 
-### 2. 事实核查 (Fact Check)
+### 2. Fact Check
 
-**场景**: 写完一段内容，想确认表述是否准确
+**Scenario**: After writing a paragraph, you want to confirm whether the statement is accurate
 
 ```python
 result = assistant.fact_check(
     "Eph receptors require clustering for full activation"
 )
 
-print(f"支持度: {result['support_level']}")  # strong/moderate/weak
-print(f"建议: {result['suggestion']}")
+print(f"Support level: {result['support_level']}")  # strong/moderate/weak
+print(f"Suggestion: {result['suggestion']}")
 ```
 
-**命令行**:
+**Command line**:
 ```bash
 python3 academic_writer.py --check "Eph receptors require clustering"
 ```
 
-**输出**:
+**Output**:
 ```
-✓ 支持度: moderate
-  置信度: 0.23
-  建议: 该陈述有一定文献支持，建议进一步查阅相关文献或调整表述。
+✓ Support level: moderate
+  Confidence: 0.23
+  Suggestion: This statement has some literature support; consider consulting related literature further or adjusting the wording.
 ```
 
 ---
 
-### 3. 查找相关研究 (Related Work)
+### 3. Find Related Work
 
-**场景**: 写 Related Work 章节，需要找类似研究的论文
+**Scenario**: While writing a Related Work section, you need papers on similar research
 
 ```python
 papers = assistant.find_related_work(
@@ -88,26 +88,26 @@ for paper in papers:
     print(f"{paper['authors']} ({paper['year']}): {paper['title']}")
 ```
 
-**命令行**:
+**Command line**:
 ```bash
 python3 academic_writer.py --related "axon guidance"
 ```
 
 ---
 
-### 4. 生成段落支持材料
+### 4. Generate Paragraph Support Material
 
-**场景**: 正在写一个段落，需要找到支持该主题的文献
+**Scenario**: You are writing a paragraph and need literature supporting the topic
 
 ```python
 material = assistant.generate_paragraph_support(
     topic="cis-interaction",
-    aspect="mechanism"  # 可选: mechanism, function, controversy, evidence
+    aspect="mechanism"  # Optional: mechanism, function, controversy, evidence
 )
 print(material)
 ```
 
-**输出**:
+**Output**:
 ```
 ### Cis-interaction - Mechanism
 
@@ -117,40 +117,40 @@ of Eph receptor signaling is essential for cell sorting...
 [2] Carvalho et al. (2006) reported that silencing of EphA3 through 
 a cis interaction with ephrinA5...
 
-[支持度: 0.25]
+[Support level: 0.25]
 ```
 
 ---
 
-### 5. 检查争议性
+### 5. Check for Controversy
 
-**场景**: 想确认某个论断是否 controversial，避免踩坑
+**Scenario**: You want to confirm whether a claim is controversial, to avoid pitfalls
 
 ```python
 result = assistant.check_controversial_claim(
     "Eph-ephrin cis-interaction is inhibitory"
 )
 
-print(f"争议程度: {result['controversy_level']}")  # high/moderate/low
-print(f"建议: {result['advice']}")
+print(f"Controversy level: {result['controversy_level']}")  # high/moderate/low
+print(f"Advice: {result['advice']}")
 ```
 
-**命令行**:
+**Command line**:
 ```bash
 python3 academic_writer.py --controversial "cis-interaction is inhibitory"
 ```
 
 ---
 
-## 交互式写作模式
+## Interactive Writing Mode
 
-最方便的方式是使用交互模式：
+The most convenient way is to use interactive mode:
 
 ```bash
 python3 academic_writer.py
 ```
 
-然后输入命令：
+Then enter commands:
 
 ```
 > cite cis interaction inhibits signaling
@@ -164,23 +164,23 @@ python3 academic_writer.py
 
 ---
 
-## 实际写作场景示例
+## Real-World Writing Scenarios
 
-### 场景 1: 写 Introduction 时需要引用
+### Scenario 1: Needing Citations While Writing the Introduction
 
 ```python
-# 正在写: "Previous studies have shown that cis-interactions..."
+# Currently writing: "Previous studies have shown that cis-interactions..."
 
-# 查找支持
+# Find support
 assistant = AcademicWritingAssistant()
 citations = assistant.find_references("cis interaction inhibits Eph signaling")
 
-# 格式化引用
+# Format citations
 citation_text = assistant.suggest_citation_style(citations, "APA")
 print(citation_text)
 ```
 
-**输出**:
+**Output**:
 ```
 Kao and Kania (2011). Ephrin-Mediated cis-Attenuation of Eph Receptor 
 Signaling Is Essential...
@@ -189,7 +189,7 @@ Carvalho et al. (2006). Silencing of EphA3 through a cis interaction
 with ephrinA5...
 ```
 
-**插入论文**:
+**Insert into the paper**:
 ```latex
 Previous studies have shown that cis-interactions between Eph receptors 
 and their ligands can attenuate receptor signaling (Kao \& Kania, 2011; 
@@ -198,22 +198,22 @@ Carvalho et al., 2006), suggesting a regulatory mechanism...
 
 ---
 
-### 场景 2: 写 Discussion 时想提争议
+### Scenario 2: Raising a Controversy While Writing the Discussion
 
 ```python
-# 想讨论: "However, the role of cis-interaction remains debated"
+# Want to discuss: "However, the role of cis-interaction remains debated"
 
 result = assistant.check_controversial_claim(
     "cis-interaction is always inhibitory"
 )
 
 if result['controversy_level'] in ['high', 'moderate']:
-    print("可以写争议段落！")
-    print(f"支持文献: {result['supporting_papers']}")
-    print(f"反对文献: {result['opposing_papers']}")
+    print("You can write a controversy paragraph!")
+    print(f"Supporting papers: {result['supporting_papers']}")
+    print(f"Opposing papers: {result['opposing_papers']}")
 ```
 
-**论文内容**:
+**Paper content**:
 ```latex
 However, the role of cis-interaction in Eph signaling remains debated. 
 While some studies suggest that cis-interactions primarily serve an 
@@ -224,13 +224,13 @@ may reflect differences in...
 
 ---
 
-### 场景 3: 写 Related Work 章节
+### Scenario 3: Writing the Related Work Section
 
 ```python
-# 查找某个主题的所有相关工作
+# Find all related work on a topic
 papers = assistant.find_related_work("tetramerization", n_papers=15)
 
-# 按年份分组
+# Group by year
 by_year = {}
 for p in papers:
     year = p['year']
@@ -238,7 +238,7 @@ for p in papers:
         by_year[year] = []
     by_year[year].append(p)
 
-# 按时间顺序输出
+# Output in chronological order
 for year in sorted(by_year.keys()):
     print(f"\n{year}:")
     for p in by_year[year]:
@@ -247,42 +247,42 @@ for year in sorted(by_year.keys()):
 
 ---
 
-### 场景 4: 实时写作辅助
+### Scenario 4: Real-Time Writing Assistance
 
 ```python
-# 边写边查
+# Check as you write
 assistant = AcademicWritingAssistant()
 
 paragraph = """
 Eph receptor signaling requires receptor clustering for full activation.
 """
 
-# 核查这个陈述
+# Fact check this statement
 result = assistant.fact_check(paragraph)
 
 if result['support_level'] == 'weak':
-    print("⚠️  这个陈述可能缺乏文献支持")
+    print("⚠️  This statement may lack literature support")
     print(result['suggestion'])
-    # 可能需要修改表述或添加文献
+    # You may need to revise the wording or add references
 ```
 
 ---
 
-## 在 LaTeX/Word 中集成
+## Integration with LaTeX/Word
 
-### 方法 1: 命令行快速查询
+### Method 1: Quick Queries from the Command Line
 
-在写作过程中打开终端：
+Open a terminal while writing:
 ```bash
 cd /Disk_2/claw_working_dir/ephrin_agentic_rag
 python3 academic_writer.py --cite "your claim here"
 ```
 
-复制引用到论文。
+Copy the citations into your paper.
 
-### 方法 2: 脚本批量处理
+### Method 2: Batch Processing with a Script
 
-创建一个 `check_paragraphs.py`:
+Create a `check_paragraphs.py`:
 ```python
 #!/usr/bin/env python3
 import sys
@@ -300,25 +300,25 @@ paragraphs = [
 for p in paragraphs:
     result = assistant.fact_check(p)
     print(f"\n[{p}]")
-    print(f"  支持度: {result['support_level']}")
+    print(f"  Support level: {result['support_level']}")
 ```
 
-### 方法 3: Jupyter Notebook
+### Method 3: Jupyter Notebook
 
 ```python
-# 在 notebook 中
+# In a notebook
 %run /Disk_2/claw_working_dir/ephrin_agentic_rag/academic_writer.py
 assistant = AcademicWritingAssistant()
 
-# 然后随时查询
+# Then query at any time
 assistant.find_references("your query")
 ```
 
 ---
 
-## 引用格式
+## Citation Formats
 
-当前支持:
+Currently supported:
 - **APA**: `Author (Year). Title.`
 - **Vancouver**: `Author. Title. Year;`
 
@@ -328,15 +328,15 @@ formatted = assistant.suggest_citation_style(citations, style="APA")
 
 ---
 
-## 性能提示
+## Performance Tips
 
-1. **相关性阈值**: 默认 0.15，如果需要更严格的结果，设为 0.20+
-2. **返回数量**: 默认 10 篇，可以增加或减少
-3. **多跳查询**: 复杂比较用 `--multihop` 或 `MultiHopRAG`
+1. **Relevance threshold**: Default is 0.15; set it to 0.20+ if you need stricter results
+2. **Number of results**: Default is 10 papers; can be increased or decreased
+3. **Multi-hop queries**: Use `--multihop` or `MultiHopRAG` for complex comparisons
 
 ---
 
-## 完整示例脚本
+## Complete Example Script
 
 ```python
 #!/usr/bin/env python3
@@ -347,17 +347,17 @@ sys.path.insert(0, '/Disk_2/claw_working_dir/ephrin_agentic_rag')
 from academic_writer import AcademicWritingAssistant
 
 def write_paragraph_with_support(topic, claim):
-    """写一段带文献支持的段落"""
+    """Write a paragraph with literature support"""
     
     assistant = AcademicWritingAssistant()
     
-    # 1. 查找引用
+    # 1. Find references
     citations = assistant.find_references(claim, min_relevance=0.20)
     
-    # 2. 格式化引用
+    # 2. Format citations
     refs = "; ".join([f"{c.authors} et al., {c.year}" for c in citations[:3]])
     
-    # 3. 生成段落
+    # 3. Generate the paragraph
     paragraph = f"""
 {topic} plays a critical role in Eph-ephrin signaling. 
 {claim} ({refs}). 
@@ -366,11 +366,11 @@ This mechanism has been implicated in various developmental processes...
     
     print(paragraph)
     
-    # 4. 事实核查
+    # 4. Fact check
     check = assistant.fact_check(claim)
-    print(f"\n[支持度: {check['support_level']}, 置信度: {check['confidence']:.2f}]")
+    print(f"\n[Support level: {check['support_level']}, Confidence: {check['confidence']:.2f}]")
 
-# 使用
+# Usage
 write_paragraph_with_support(
     topic="Cis-interaction",
     claim="Cis-interaction between Eph receptors and ephrins can attenuate receptor signaling"
@@ -379,16 +379,16 @@ write_paragraph_with_support(
 
 ---
 
-## 常见问题
+## FAQ
 
-**Q: 知识库包含哪些论文？**
-A: 199 篇 Eph/Ephrin 相关论文，涵盖 1986-2025 年。
+**Q: Which papers are in the knowledge base?**  
+A: 199 Eph/Ephrin-related papers covering 1986-2025.
 
-**Q: 相关性分数是什么意思？**
-A: 0.15-0.25: 中等相关；0.25+: 高度相关；0.15以下: 弱相关
+**Q: What does the relevance score mean?**  
+A: 0.15-0.25: moderately relevant; 0.25+: highly relevant; below 0.15: weakly relevant
 
-**Q: 如何更新知识库？**
-A: 运行 `python3 build_knowledge_base.py` 重建（如果添加了新论文）
+**Q: How do I update the knowledge base?**  
+A: Run `python3 build_knowledge_base.py` to rebuild (if new papers have been added)
 
-**Q: 支持非 Eph/Ephrin 主题吗？**
-A: 当前仅支持知识库中的论文，但可以查询任何内容（只是可能找不到相关文献）
+**Q: Are non-Eph/Ephrin topics supported?**  
+A: Currently only papers in the knowledge base are supported, but you can query anything (you just may not find relevant literature)

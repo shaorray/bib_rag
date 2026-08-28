@@ -2,7 +2,7 @@
 """
 evidence_gate.py — Evidence sufficiency check + explicit gap reporting.
 
-Borrowed mechanism (ragent 证据门槛, see /Disk_bot/notes/Agentic_RAG/ragent_技术笔记.md):
+Borrowed mechanism (ragent's evidence gate — see the ragent tech notes):
 before the agent settles for an answer (especially in fallback_response when
 iteration limits were hit), a deterministic gate checks whether each retrieval
 query actually returned evidence. The gate produces:

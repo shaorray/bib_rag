@@ -1,127 +1,127 @@
-# Agentic RAG 知识库改进方案
+# Agentic RAG Knowledge Base Improvement Plan
 
-## 当前问题分析 (2026-04-30)
+## Current Problem Analysis (2026-04-30)
 
-### 1. 重复内容问题 ⚠️
-**现状**: 4844 个文档块中，有 1055 个完全重复
-- 元数据前缀重复（PMID/Year/Journal）存储在每个块中
-- 同一篇文献的多个块共享相同前缀
-- **浪费**: 约 20% 存储空间
+### 1. Duplicate Content Problem ⚠️
+**Current state**: Of 4844 document chunks, 1055 are exact duplicates
+- Metadata prefix duplication (PMID/Year/Journal) is stored in every chunk
+- Multiple chunks from the same paper share the same prefix
+- **Waste**: roughly 20% of storage space
 
-**解决方案**: 
-- 元数据与文本分离存储
-- 只在检索时拼接元数据
+**Solution**: 
+- Store metadata separately from text
+- Concatenate metadata only at retrieval time
 
-### 2. 空章节问题 ⚠️⚠️
-**现状**: 大量章节标题后没有内容
+### 2. Empty Section Problem ⚠️⚠️
+**Current state**: Many section headings have no content following them
 
-| 章节类型 | 空比例 | 影响 |
+| Section type | Empty ratio | Impact |
 |----------|--------|------|
-| RESULTS | 78.3% | 严重 |
-| Methods | 73.3% | 严重 |
-| Figure Legends | 92.9% | 中等 |
-| Supplementary | 90.0% | 中等 |
+| RESULTS | 78.3% | Severe |
+| Methods | 73.3% | Severe |
+| Figure Legends | 92.9% | Moderate |
+| Supplementary | 90.0% | Moderate |
 
-**根本原因**: Markdown 格式不一致
-- 有些文件用 `## RESULTS` 作为标题但内容在下一级
-- 有些文件内容直接跟在标题后没有空行
-- 子章节（如 `### Results part 1`）被当作独立章节
+**Root cause**: Inconsistent Markdown formatting
+- Some files use `## RESULTS` as a heading but place the content at a lower level
+- Some files have content directly after the heading with no blank line
+- Sub-sections (e.g. `### Results part 1`) are treated as independent sections
 
-**解决方案**:
-- 改进章节提取逻辑
-- 合并子章节到父章节
-- 过滤空内容章节
+**Solution**:
+- Improve the section extraction logic
+- Merge sub-sections into their parent sections
+- Filter out sections with empty content
 
-### 3. 分块粒度问题
-**现状**: 
-- 平均 461 词/块（范围 9-1514）
-- 重叠 100 词可能不够
-- 有些块太短（<20词的有626个）
+### 3. Chunking Granularity Problem
+**Current state**: 
+- Average 461 words/chunk (range 9-1514)
+- 100-word overlap may not be enough
+- Some chunks are too short (626 are <20 words)
 
-**解决方案**:
-- 设置最小块大小（100词）
-- 设置最大块大小（1000词）
-- 增加重叠到 200 词
+**Solution**:
+- Set a minimum chunk size (100 words)
+- Set a maximum chunk size (1000 words)
+- Increase overlap to 200 words
 
-### 4. 内容质量问题
-**现状**:
-- 包含 "Figure 1.", "Table 2." 等无意义块
-- 包含 "Acknowledgments", "References" 等非学术内容
-- 包含 "Supplementary Material" 等辅助内容
+### 4. Content Quality Problem
+**Current state**:
+- Contains meaningless chunks like "Figure 1.", "Table 2."
+- Contains non-academic content like "Acknowledgments", "References"
+- Contains auxiliary content like "Supplementary Material"
 
-**解决方案**:
-- 过滤非学术章节
-- 只保留核心内容（摘要、引言、结果、讨论、方法）
-
----
-
-## 改进方案
-
-### 方案 A: 修复当前知识库（推荐）
-
-1. **重新分块**
-   - 过滤空章节
-   - 合并子章节
-   - 设置最小/最大块大小
-
-2. **去重**
-   - 移除完全重复的块
-   - 元数据与内容分离
-
-3. **过滤**
-   - 移除 Figure/Table 块
-   - 移除 Acknowledgments/References
-   - 只保留核心学术内容
-
-### 方案 B: 增量优化
-
-1. **添加引用网络**
-   - 提取每篇文献的引用关系
-   - 构建引用图谱
-   - 支持基于引用的检索
-
-2. **添加实体标签**
-   - 用 NER 提取蛋白质、基因、细胞类型
-   - 添加实体标签到文档块
-   - 支持实体检索
-
-3. **添加摘要向量**
-   - 为每篇文献生成摘要向量
-   - 先检索文献级别，再检索块级别
-   - 提高检索效率
-
-### 方案 C: 多知识库融合
-
-1. **层次化检索**
-   - 第一层：文献级别（基于标题/摘要）
-   - 第二层：章节级别（基于章节内容）
-   - 第三层：段落级别（基于具体文本）
-
-2. **跨知识库查询**
-   - v1 (199篇经典文献)
-   - v2 (500篇新文献)
-   - Graphify 知识图谱
-   - 自动选择最优来源
+**Solution**:
+- Filter out non-academic sections
+- Keep only core content (abstract, introduction, results, discussion, methods)
 
 ---
 
-## 具体实施步骤
+## Improvement Options
 
-### Step 1: 修复分块逻辑
+### Option A: Fix the Current Knowledge Base (Recommended)
+
+1. **Re-chunk**
+   - Filter out empty sections
+   - Merge sub-sections
+   - Set minimum/maximum chunk sizes
+
+2. **Deduplicate**
+   - Remove exactly duplicated chunks
+   - Separate metadata from content
+
+3. **Filter**
+   - Remove Figure/Table chunks
+   - Remove Acknowledgments/References
+   - Keep only core academic content
+
+### Option B: Incremental Optimization
+
+1. **Add a citation network**
+   - Extract citation relationships for each paper
+   - Build a citation graph
+   - Support citation-based retrieval
+
+2. **Add entity tags**
+   - Use NER to extract proteins, genes, cell types
+   - Attach entity tags to document chunks
+   - Support entity retrieval
+
+3. **Add summary vectors**
+   - Generate a summary vector for each paper
+   - Retrieve at the paper level first, then at the chunk level
+   - Improve retrieval efficiency
+
+### Option C: Multi-Knowledge-Base Fusion
+
+1. **Hierarchical retrieval**
+   - Level 1: paper level (based on title/abstract)
+   - Level 2: section level (based on section content)
+   - Level 3: paragraph level (based on specific text)
+
+2. **Cross-knowledge-base queries**
+   - v1 (199 classic papers)
+   - v2 (500 new papers)
+   - Graphify knowledge graph
+   - Automatically select the best source
+
+---
+
+## Concrete Implementation Steps
+
+### Step 1: Fix the Chunking Logic
 
 ```python
-# 改进后的分块策略
+# Improved chunking strategy
 def create_chunks_v3(text, sections, meta):
     """
-    改进的分块策略：
-    1. 过滤空章节（<50词）
-    2. 合并子章节到父章节
-    3. 设置最小块 100 词，最大块 800 词
-    4. 重叠 200 词
-    5. 过滤非学术章节
+    Improved chunking strategy:
+    1. Filter out empty sections (<50 words)
+    2. Merge sub-sections into parent sections
+    3. Set min chunk 100 words, max chunk 800 words
+    4. Overlap of 200 words
+    5. Filter out non-academic sections
     """
     
-    # 要过滤的章节
+    # Sections to filter out
     skip_sections = {
         'references', 'acknowledgments', 'acknowledgements',
         'figure legends', 'tables', 'supplementary material',
@@ -138,7 +138,7 @@ def create_chunks_v3(text, sections, meta):
     overlap = 200
     min_chunk_size = 100
     
-    # 元数据前缀（只存一次）
+    # Metadata prefix (stored only once)
     meta_dict = {
         'pmid': meta.get('pmid', ''),
         'year': meta.get('year', ''),
@@ -148,7 +148,7 @@ def create_chunks_v3(text, sections, meta):
         'tier': meta.get('tier', ''),
     }
     
-    # 处理核心章节
+    # Process core sections
     core_sections = ['abstract', 'introduction', 'background', 
                      'results', 'discussion', 'methods', 'conclusion']
     
@@ -159,26 +159,26 @@ def create_chunks_v3(text, sections, meta):
         section_text = sections[section_key].strip()
         section_words = section_text.split()
         
-        # 过滤空章节
+        # Filter out empty sections
         if len(section_words) < min_chunk_size:
             continue
         
-        # 过滤非学术内容
+        # Filter out non-academic content
         if any(skip in section_key.lower() for skip in skip_sections):
             continue
         
-        # 分段
+        # Split into chunks
         step = chunk_size - overlap
         for i in range(0, len(section_words), step):
             chunk_words = section_words[i:i + chunk_size]
             
-            # 确保最后一块不会太小
+            # Ensure the last chunk is not too small
             if len(chunk_words) < min_chunk_size and i > 0:
                 continue
             
             chunk_text = ' '.join(chunk_words)
             
-            # 去重检查
+            # Deduplication check
             chunk_hash = hash(chunk_text[:200])
             if chunk_hash in seen_hashes:
                 continue
@@ -193,17 +193,17 @@ def create_chunks_v3(text, sections, meta):
     return chunks
 ```
 
-### Step 2: 添加引用网络
+### Step 2: Add a Citation Network
 
 ```python
-# 提取引用关系
+# Extract citation relationships
 def extract_citations(text):
-    """提取文献中的引用"""
-    # 匹配 (Author, Year) 格式
-    citations = re.findall(r'\(([A-Z][a-z]+\s+et\s+al\.,?\s+\d{4}[a-z]?)\)', text)
+    """Extract citations from the paper"""
+    # Match the (Author, Year) format
+    citations = re.findall(r'\(([A-Z][a-z]+\s+et\s+al\.?,?\s+\d{4}[a-z]?)\)', text)
     return citations
 
-# 构建引用图
+# Build the citation graph
 citation_graph = {}
 for doc in documents:
     pmid = doc['pmid']
@@ -211,10 +211,10 @@ for doc in documents:
     citation_graph[pmid] = citations
 ```
 
-### Step 3: 添加实体标签
+### Step 3: Add Entity Tags
 
 ```python
-# 使用正则表达式提取实体
+# Extract entities with regular expressions
 Eph_PATTERN = re.compile(r'\b(Eph[A-Z]\d?|ephrin-[AB]\d?)\b', re.IGNORECASE)
 CELL_PATTERN = re.compile(r'\b(neuron|astrocyte|oligodendrocyte|microglia|HEK293|COS7)\b', re.IGNORECASE)
 
@@ -228,32 +228,32 @@ def extract_entities(text):
 
 ---
 
-## 预期效果
+## Expected Outcomes
 
-| 指标 | 当前 | 改进后 |
+| Metric | Current | After Improvement |
 |------|------|--------|
-| 总块数 | 4844 | ~3500 (去重+过滤) |
-| 重复块 | 1055 (22%) | <50 (1%) |
-| 平均块大小 | 461 词 | ~600 词 |
-| 空/短块 | 626 (13%) | <100 (2%) |
-| 检索质量 | 中等 | 高 |
+| Total chunks | 4844 | ~3500 (dedup + filter) |
+| Duplicate chunks | 1055 (22%) | <50 (1%) |
+| Average chunk size | 461 words | ~600 words |
+| Empty/short chunks | 626 (13%) | <100 (2%) |
+| Retrieval quality | Medium | High |
 
 ---
 
-## 长期改进方向
+## Long-Term Improvement Directions
 
-1. **多模态检索**
-   - 添加图片/表格描述
-   - 支持图表检索
+1. **Multimodal retrieval**
+   - Add image/table descriptions
+   - Support figure/table retrieval
 
-2. **时序分析**
-   - 按年份分析研究趋势
-   - 发现新兴研究方向
+2. **Temporal analysis**
+   - Analyze research trends by year
+   - Discover emerging research directions
 
-3. **引文网络分析**
-   - 发现高影响力论文
-   - 识别研究社区
+3. **Citation network analysis**
+   - Discover high-impact papers
+   - Identify research communities
 
-4. **自动摘要**
-   - 为每篇文献生成摘要
-   - 支持快速浏览
+4. **Automatic summarization**
+   - Generate a summary for each paper
+   - Support quick browsing

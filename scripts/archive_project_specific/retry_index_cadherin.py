@@ -17,7 +17,7 @@ def main():
     sources = set(m.get("source", "") for m in r["metadatas"])
     mds = [f for f in os.listdir(MD_DIR) if f.endswith(".md")]
     missing = [f for f in mds if f not in sources]
-    print(f"待重试: {len(missing)} 篇")
+    print(f"to retry: {len(missing)} papers")
     t0 = time.time()
     ok = fail = 0
     for i, f in enumerate(missing, 1):
@@ -33,7 +33,7 @@ def main():
             print(f"  ❌ {f}: {str(e)[:80]}", file=sys.stderr)
         if i % 10 == 0 or i == len(missing):
             print(f"[{i}/{len(missing)}] ok={ok} fail={fail} ({time.time()-t0:.0f}s)", file=sys.stderr)
-    print(f"\n完成: ok={ok} fail={fail} 总耗时 {time.time()-t0:.0f}s")
+    print(f"\ndone: ok={ok} fail={fail}, {time.time()-t0:.0f}s total")
 
 if __name__ == "__main__":
     main()

@@ -1,8 +1,8 @@
 # GUARD/HYBRID — Citation verification, hybrid retrieval & snowballing
 
 Six-gap hardening (2026-08-28), mechanisms borrowed from the 23-repo survey
-(`/Disk_bot/notes/{citation_rag,Agentic_RAG,zotero_RAG}/`, comparison in
-`/Disk_bot/notes/bib_rag_对比与借鉴.md`).
+(citation-RAG / agentic-RAG / Zotero-RAG notes; comparison table in the
+borrowing-survey notes).
 
 ## What was added
 
@@ -11,7 +11,7 @@ Six-gap hardening (2026-08-28), mechanisms borrowed from the 23-repo survey
 | `src/citation_guard.py` | Sources whitelist vs `retrieval_keys` + lexical support check (paper-qa / LumiCite / citelocal-agent) | zero LLM |
 | `src/zotero_match.py` | Title-similarity + DOI verification for Zotero hits (paper-qa) | zero LLM |
 | `src/hybrid_search.py` | FTS5 BM25 channel + RRF k=60 fusion (DocsGPT / seerai) | zero LLM |
-| `src/evidence_gate.py` | Evidence-sufficiency audit + gap reporting in fallback (ragent 证据门槛) | zero LLM |
+| `src/evidence_gate.py` | Evidence-sufficiency audit + gap reporting in fallback (ragent's evidence gate) | zero LLM |
 | `src/reference_graph.py` | Citation graph + forward/backward snowballing (Corvus) | zero LLM |
 | `src/chunking.py` (extended) | Figure/table captions become atomic parents with `chunk_type` tag (LumiCite) | zero LLM |
 | `src/evaluate.py` (extended) | `citation_faithfulness()` metric reusing the guard | zero LLM |
@@ -87,8 +87,8 @@ writes; FTS roundtrip uses a tmp library via BIB_RAG_ROOT). Both runners work:
 
 # Round 2 — CJK bigrams, identifier normalization, broadened retry (2026-08-28)
 
-Three first-tier mechanisms from the Zotero-repo v2 survey
-(`/Disk_bot/notes/zotero_RAG/`), all zero-LLM:
+Three first-tier mechanisms from the Zotero-repo v2 survey (Zotero-RAG repo
+notes), all zero-LLM:
 
 ## B2 — CJK character-bigram FTS channel (`src/hybrid_search.py` v2)
 
@@ -142,7 +142,7 @@ top-level imports (`agent_tools.py` ×3, matches the existing
 # Round 3 — `scripts/doctor.py` runtime self-diagnostics (2026-08-28)
 
 Borrowed mechanisms (research-hub doctor.py architecture + haiku.rag doctor
-CLI checks; see `/Disk_bot/notes/健康检查_横向调研.md`):
+CLI checks; see the health-check cross-survey notes):
 
 ```
 python3 scripts/doctor.py                 # text report, all checks

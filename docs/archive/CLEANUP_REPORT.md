@@ -1,132 +1,132 @@
-# 文件夹整理报告
+# Folder Cleanup Report
 
-## 整理前状态
+## State Before Cleanup
 
-原有60+个文件混乱地放在根目录，包含：
-- 多个版本的脚本（v1, v2, v3）
-- 大量测试文件（test_*.py）
-- 调试脚本（debug_*.py）
-- 过时的文档（PHASE1*, OPTIMIZATION*）
-- 实验性代码（LangGraph相关）
-- Python缓存文件（__pycache__）
-- 日志文件（metrics.log）
+Over 60 files were originally scattered in the root directory, including:
+- Multiple script versions (v1, v2, v3)
+- A large number of test files (test_*.py)
+- Debug scripts (debug_*.py)
+- Outdated docs (PHASE1*, OPTIMIZATION*)
+- Experimental code (LangGraph-related)
+- Python cache files (__pycache__)
+- Log files (metrics.log)
 
-## 整理后结构
+## Structure After Cleanup
 
 ```
 ephrin_agentic_rag/
-├── chroma_db/          # V1知识库（遗留）
-├── chroma_db_v2/       # V2知识库
-├── chroma_db_v3/       # V3知识库（推荐）
-├── src/                # 源代码
-│   ├── agents/         # Agentic RAG组件
-│   ├── queries/        # 查询脚本
-│   ├── utils/          # 工具脚本
-│   └── *.py            # 核心处理脚本
-├── docs/               # 文档
-├── data/               # 配置文件
-└── archive/            # 归档文件
-    ├── old_scripts/    # 旧脚本
-    ├── test_files/     # 测试文件
-    ├── documents/      # 旧文档
-    └── experimental/   # 实验性代码
+├── chroma_db/          # V1 knowledge base (legacy)
+├── chroma_db_v2/       # V2 knowledge base
+├── chroma_db_v3/       # V3 knowledge base (recommended)
+├── src/                # Source code
+│   ├── agents/         # Agentic RAG components
+│   ├── queries/        # Query scripts
+│   ├── utils/          # Utility scripts
+│   └── *.py            # Core processing scripts
+├── docs/               # Documentation
+├── data/               # Configuration files
+└── archive/            # Archived files
+    ├── old_scripts/    # Old scripts
+    ├── test_files/     # Test files
+    ├── documents/      # Old docs
+    └── experimental/   # Experimental code
 ```
 
-## 保留的核心文件
+## Core Files Kept
 
-### 处理脚本（src/）
-- `src/process_v3_papers.py` - V3处理（推荐）
-- `src/process_v2_papers.py` - V2处理
-- `src/build_knowledge_base.py` - 构建知识库
-- `src/add_new_papers.py` - 添加新文献
+### Processing scripts (src/)
+- `src/process_v3_papers.py` - V3 processing (recommended)
+- `src/process_v2_papers.py` - V2 processing
+- `src/build_knowledge_base.py` - Build the knowledge base
+- `src/add_new_papers.py` - Add new papers
 
-### 查询脚本（src/queries/）
-- `src/queries/query_v3_kb.py` - V3查询（推荐）
-- `src/queries/query_v2_kb.py` - V2查询
-- `src/queries/hybrid_search.py` - 混合搜索
-- `src/queries/quick_query.py` - 快速查询
+### Query scripts (src/queries/)
+- `src/queries/query_v3_kb.py` - V3 queries (recommended)
+- `src/queries/query_v2_kb.py` - V2 queries
+- `src/queries/hybrid_search.py` - Hybrid search
+- `src/queries/quick_query.py` - Quick queries
 
-### Agent组件（src/agents/）
-- `src/agents/agentic_workflow.py` - 主工作流
-- `src/agents/rag_core.py` - 核心逻辑
+### Agent components (src/agents/)
+- `src/agents/agentic_workflow.py` - Main workflow
+- `src/agents/rag_core.py` - Core logic
 - `src/agents/self_rag.py` - Self-RAG
-- `src/agents/multi_hop_rag.py` - 多跳RAG
+- `src/agents/multi_hop_rag.py` - Multi-hop RAG
 
-### 学术写作（src/utils/）
-- `src/utils/academic_writer.py` - 写作助手
-- `src/utils/citation_manager.py` - 引用管理
+### Academic writing (src/utils/)
+- `src/utils/academic_writer.py` - Writing assistant
+- `src/utils/citation_manager.py` - Citation management
 
-### 文档（docs/）
-- `docs/README.md` - 主文档
-- `docs/USAGE.md` - 使用说明
-- `docs/QUICK_START.md` - 快速开始
-- `docs/PMID_CITATION_GUIDE.md` - PMID引用指南
-- `docs/RAG_EMBEDDING_GUIDE.md` - Embedding指南
-- `docs/V3_IMPROVEMENT_REPORT.md` - V3改进报告
+### Docs (docs/)
+- `docs/README.md` - Main doc
+- `docs/USAGE.md` - Usage guide
+- `docs/QUICK_START.md` - Quick start
+- `docs/PMID_CITATION_GUIDE.md` - PMID citation guide
+- `docs/RAG_EMBEDDING_GUIDE.md` - Embedding guide
+- `docs/V3_IMPROVEMENT_REPORT.md` - V3 improvement report
 
-## 归档的文件
+## Archived Files
 
-### 旧脚本（archive/old_scripts/）
+### Old scripts (archive/old_scripts/)
 - demo.py, debug_retry.py, debug_routing.py
 - analyze_kb.py, langfuse_monitor.py
 - redis_cache.py
 
-### 测试文件（archive/test_files/）
-- test_*.py (10个测试脚本)
+### Test files (archive/test_files/)
+- test_*.py (10 test scripts)
 - verify_improvements.py
 
-### 旧文档（archive/documents/）
+### Old docs (archive/documents/)
 - DEPLOYMENT_REPORT.md
-- OPTIMIZATION_*.md (3个)
+- OPTIMIZATION_*.md (3 files)
 - PERFORMANCE_EVALUATION.md
-- PHASE1_*.md (3个)
+- PHASE1_*.md (3 files)
 - STATUS.md, TEST_REPORT.md
 - VERSION_COMPARISON.md
-- OPENDATALOADER_*.md (2个)
+- OPENDATALOADER_*.md (2 files)
 
-### 实验性代码（archive/experimental/）
+### Experimental code (archive/experimental/)
 - langgraph_agentic_rag.py
 - langgraph_phase1.py
 
-## 删除的文件
+## Deleted Files
 
-- `metrics.log` - 日志文件
-- `query_history.json` - 查询历史
-- `__pycache__/` - Python缓存
+- `metrics.log` - Log file
+- `query_history.json` - Query history
+- `__pycache__/` - Python cache
 
-## 修复的问题
+## Issues Fixed
 
-1. **导入路径**: 更新所有移动后的文件的sys.path
-2. **结构清晰**: 按功能分类存放
-3. **版本管理**: 明确区分V1/V2/V3
-4. **文档整理**: 保留最新文档，归档旧文档
+1. **Import paths**: Updated sys.path for all moved files
+2. **Clear structure**: Organized by function
+3. **Version management**: Clearly separated V1/V2/V3
+4. **Doc housekeeping**: Kept the latest docs, archived old ones
 
-## 使用方式
+## Usage
 
-### 推荐命令（V3）
+### Recommended commands (V3)
 ```bash
-# 查询
+# Query
 python3 src/queries/query_v3_kb.py "cis interaction" -n 5
 
-# 带引用段落
+# With cited paragraphs
 python3 src/queries/query_v3_kb.py "Eph signaling" -n 3 --paragraph
 
-# 混合搜索
+# Hybrid search
 python3 src/queries/hybrid_search.py "axon guidance"
 ```
 
-### 如果需要恢复旧文件
+### If you need to restore old files
 ```bash
-# 从archive恢复
+# Restore from archive
 cp archive/old_scripts/demo.py .
 cp archive/documents/STATUS.md docs/
 ```
 
-## 文件数量对比
+## File Count Comparison
 
-| 项目 | 整理前 | 整理后 |
-|------|--------|--------|
-| 根目录文件 | 60+ | 1 (README.md) |
-| 源代码 | 混乱 | src/下分类存放 |
-| 文档 | 混乱 | docs/下统一存放 |
-| 归档文件 | 0 | archive/下4个子目录 |
+| Item | Before | After |
+|------|--------|-------|
+| Root-directory files | 60+ | 1 (README.md) |
+| Source code | Scattered | Organized under src/ |
+| Docs | Scattered | Unified under docs/ |
+| Archived files | 0 | 4 subdirectories under archive/ |
