@@ -53,6 +53,9 @@ import sys
 
 import os
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from kb_config import get_config
+from library_config import get_setting as _lib_setting
 
 _CFG = get_config()
 
@@ -61,7 +64,6 @@ _CFG = get_config()
 # ---------------------------------------------------------------------------
 
 DEFAULT_PARENT_DIR = Path(_CFG["parent_store_dir"])
-from library_config import get_setting as _lib_setting
 DEFAULT_BIB_PATH = Path(_lib_setting(_CFG["data_root"], "bib_path", "My Library.bib"))
 DEFAULT_ZOTERO_URL = "http://localhost:23119"
 DEFAULT_CROSSREF_MAILTO = "bib-rag@example.com"
@@ -97,8 +99,6 @@ from bib_utils import (
 )
 
 import zotero_access  # noqa: E402  (scripts/ sibling; MCP-first Zotero access)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from kb_config import get_config
 
 
 # ---------------------------------------------------------------------------
