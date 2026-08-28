@@ -13,7 +13,31 @@ retrieval tags) after the noisy index-time extraction. Run via wrappers:
 3. **Remote registries** — Crossref / PubMed / OpenAlex (inside meta_audit).
    For papers not in Zotero + cross-validation of 1 and 2.
 
-## Pipeline order (per batch of papers)
+## Orchestrator (recommended entry point)
+
+`backfill_all.py` runs the layers in fallback order per paper, stopping at the
+first layer that resolves it:
+
+```
+0. BibTeX snapshot  — if provided (--bib or config.json bib_path):
+                      bib_to_parent_store triple-match DOI backfill
+1. Live Zotero      — if reachable (MCP or HTTP): zotero_search/zotero_item
+2. Remote registries — Crossref DOI verify → Crossref/OpenAlex/PubMed title search
+3. Final proof-read  — meta_audit.py round (confidence-gated, backs up)
+```
+
+Writes a per-paper ledger (`data/backfill_status.csv`: which layer fixed what)
+so re-runs skip fixed papers and each layer's contribution is auditable.
+Noisy titles (journal headers) are detected and skipped for Zotero search,
+and cleaned heuristically before registry search — Crossref recovers real
+titles from "Developmental Biology **207, available online..." style noise.
+
+```bash
+<name>-rag scripts/metadata/backfill_all.py --dry-run            # plan + probe
+<name>-rag scripts/metadata/backfill_all.py --bib "/path/My Library.bib" --apply
+```
+
+## Manual pipeline order (equivalent, step-by-step)
 
 | Step | Tool | Writes |
 |---|---|---|
