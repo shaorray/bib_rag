@@ -124,6 +124,11 @@ def patch_registry(name: str, root: str, collection: str) -> bool:
                 break
     if end is None:
         sys.exit(f"ERROR: could not find the closing brace of _KB_REGISTRY in {KB_CONFIG}")
+    # ensure the previous last entry ends with a comma before we append ours
+    body = s[start + 1:end].rstrip()
+    if body and not body.endswith(","):
+        s = s[:start + 1] + body + "," + s[end:]
+        end += 1
     entry = (f'\n    "{name}": {{\n'
              f'        "root": "{root}",\n'
              f'        "collection": "{collection}",\n'
