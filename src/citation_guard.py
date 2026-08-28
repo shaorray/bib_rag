@@ -36,7 +36,10 @@ import hashlib
 from collections import Counter
 from typing import Dict, List, Optional, Set, Tuple
 
-from .kb_config import get_config
+try:
+    from .kb_config import get_config
+except ImportError:  # src/ on sys.path directly (CLI/tests)
+    from kb_config import get_config
 
 # ---------------------------------------------------------------------------
 # Tunables (env-overridable, same pattern as agent_tools budgets)
