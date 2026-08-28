@@ -16,9 +16,9 @@ import time
 
 import chromadb
 
-from kb_config import get_config
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from kb_config import get_config
 
 _CFG = get_config()
 CHROMA_DB_PATH = _CFG["chroma_path"]

@@ -43,8 +43,8 @@ import sys
 import time
 from pathlib import Path
 
-from kb_config import get_config  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from kb_config import get_config  # noqa: E402
 
 _CFG = get_config()
 OUT_DIR = _CFG["outputs_dir"]

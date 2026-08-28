@@ -38,8 +38,8 @@ from pathlib import Path
 
 from bib_utils import normalize_doi
 
-from kb_config import get_config
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from kb_config import get_config
 
 _CFG = get_config()
 

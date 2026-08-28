@@ -53,7 +53,6 @@ import sys
 
 import os
 
-from kb_config import get_config
 
 _CFG = get_config()
 
@@ -99,6 +98,7 @@ from bib_utils import (
 
 import zotero_access  # noqa: E402  (scripts/ sibling; MCP-first Zotero access)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from kb_config import get_config
 
 
 # ---------------------------------------------------------------------------
