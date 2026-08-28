@@ -8,7 +8,8 @@ safe_zone/
 outputs/
 eph_rag/
 geo_rag/
-# (docs/archive/ IS tracked — historical provenance)
+# docs/archive/ kept locally only (historical provenance, not published)
+/docs/archive/
 
 # Python cache
 __pycache__/
