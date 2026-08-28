@@ -25,7 +25,8 @@ from langchain_community.vectorstores import Chroma
 # Optional temp-dir override (e.g. a larger scratch disk) via BIB_RAG_TMPDIR;
 # otherwise the system default applies.
 import tempfile
-_tmp_override = os.environ.get("BIB_RAG_TMPDIR")
+from library_config import get_setting as _lib_setting
+_tmp_override = _lib_setting(_CFG["data_root"], "tmpdir")
 if _tmp_override and os.path.isdir(_tmp_override):
     tempfile.tempdir = _tmp_override
     os.environ["TMPDIR"] = _tmp_override

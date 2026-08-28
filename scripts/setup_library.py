@@ -32,6 +32,7 @@ from datetime import date
 from pathlib import Path
 
 CODE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(CODE_ROOT / "src"))
 KB_CONFIG = CODE_ROOT / "src" / "kb_config.py"
 WRAPPER_DIR = Path.home() / ".local" / "bin"
 
@@ -218,6 +219,9 @@ def main():
     if not ctx_md.exists():
         ctx_md.write_text(CONTEXT_MD_TEMPLATE.format(name=name, domain=domain))
         print(f"  [ok] {ctx_md}")
+    from library_config import write_starter as _write_lib_config
+    cfg_p = _write_lib_config(str(root_path), name, domain)
+    print(f"  [ok] {cfg_p}")
 
     # 4. registry entry
     if patch_registry(name, str(root_path), collection):

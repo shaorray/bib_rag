@@ -192,10 +192,12 @@ def main():
     # LLM client
     if args.backend == "local":
         LOCAL_URL = "http://localhost:5015/v1"
-        LOCAL_MODEL = os.environ.get("CLASSIFY_MODEL", "")
+        from library_config import get_setting
+        LOCAL_MODEL = get_setting(_CFG["data_root"], "classify_model", "")
         if not LOCAL_MODEL:
-            sys.exit("ERROR: --backend local needs CLASSIFY_MODEL set to a local "
-                     "GGUF path (or use --backend cloud). Example: "
+            sys.exit("ERROR: --backend local needs a local GGUF path. Set it via: "
+                     "(1) <library>/config.json settings.classify_model, or "
+                     "(2) CLASSIFY_MODEL env var. Example: "
                      "CLASSIFY_MODEL=/path/to/model.gguf")
         llm_url, llm_model = LOCAL_URL, LOCAL_MODEL
     else:

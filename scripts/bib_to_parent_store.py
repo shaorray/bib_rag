@@ -30,7 +30,8 @@ from bib_utils import (
 
 _CFG = get_config()
 
-BIB_PATH = Path(os.environ.get("BIB_RAG_BIB_PATH", "My Library.bib"))
+from library_config import get_setting as _lib_setting
+BIB_PATH = Path(_lib_setting(_CFG["data_root"], "bib_path", "My Library.bib"))
 if not BIB_PATH.exists():
     print(f"[warn] BibTeX file not found: {BIB_PATH} — set BIB_RAG_BIB_PATH env "
           f"or pass --bib <path> (needed only for metadata-fill workflows)")

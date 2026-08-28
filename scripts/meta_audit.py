@@ -62,7 +62,8 @@ _CFG = get_config()
 # ---------------------------------------------------------------------------
 
 DEFAULT_PARENT_DIR = Path(_CFG["parent_store_dir"])
-DEFAULT_BIB_PATH = Path(os.environ.get("BIB_RAG_BIB_PATH", "My Library.bib"))
+from library_config import get_setting as _lib_setting
+DEFAULT_BIB_PATH = Path(_lib_setting(_CFG["data_root"], "bib_path", "My Library.bib"))
 DEFAULT_ZOTERO_URL = "http://localhost:23119"
 DEFAULT_CROSSREF_MAILTO = "bib-rag@example.com"
 DEFAULT_DATA_DIR = Path(_CFG["data_dir"])

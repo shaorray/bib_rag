@@ -44,7 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 _CFG = get_config()
 
 PARENT_DIR = _CFG["parent_store_dir"]
-BIB_PATH = os.environ.get("BIB_RAG_BIB_PATH", "My Library.bib")
+from library_config import get_setting as _lib_setting
+BIB_PATH = _lib_setting(_CFG["data_root"], "bib_path", "My Library.bib")
 OUT_DIR = _CFG["outputs_dir"]
 DATA_DIR = _CFG["data_dir"]
 

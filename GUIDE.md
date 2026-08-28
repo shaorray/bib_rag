@@ -31,6 +31,9 @@ One command does all of:
 1. Creates `<RAG root>/<name>_rag/` with `chroma_db_new/`, `parent_store/`,
    `parent_store_disabled/`, `data/`, `outputs/`, `md/`
 2. Writes `LIBRARY.md` (manifest) + `CONTEXT.md` (domain glossary starter)
+   + `config.json` (per-library machine/model settings — local classify model,
+   BibTeX path, tmpdir, domain topic seeds. Resolution: env var > config.json
+   > toolkit default. Never put secrets in it.)
 3. Registers the library in `src/kb_config.py` (`_KB_REGISTRY`: root + collection,
    brace-counted patch with post-write sanity checks — cannot clobber the file)
 4. Emits a `neuro-rag` wrapper in `~/.local/bin/` (name = library name minus `_rag`)
