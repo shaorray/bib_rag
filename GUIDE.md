@@ -10,10 +10,38 @@ self-describing data folders under a common RAG root. One toolkit, many librarie
 └── ...
 ```
 
-## Quick start (2 minutes)
+## Installation from scratch
+
+The toolkit is a plain Python repo — no install step, just clone and go:
 
 ```bash
-cd <this repo>
+# 1. Clone anywhere (it finds its own paths; libraries live in sibling folders)
+git clone https://github.com/shaorray/bib_rag.git
+cd bib_rag
+
+# 2. Python dependencies (Python 3.10; see requirements.txt)
+pip install -r requirements.txt
+#    if chromadb then fails with "cannot import name 'builder' from
+#    'google.protobuf.internal'", export PYTHONPATH to your user site-packages
+#    (see Troubleshooting) — the generated wrappers do this automatically.
+
+# 3. One-time services (see "Prerequisites" below): embedding server on 8081,
+#    optional LLM on 11434/5015.
+
+# 4. Create your first library:
+/usr/bin/python3.10 -B scripts/setup_library.py
+```
+
+Where libraries live: by default, **next to the repo clone** (`<clone>/../<name>_rag/`).
+Set `BIB_RAG_HOME=/some/dir` to place them elsewhere. This is derived, not hardcoded —
+a cloned toolkit in any location resolves its own code root and library root
+automatically (verified: a fresh clone in /tmp resolves both correctly).
+
+## Quick start (2 minutes)
+
+Already cloned + deps installed? One command:
+
+```bash
 /usr/bin/python3.10 -B scripts/setup_library.py
 ```
 
@@ -55,8 +83,7 @@ drop any function. Re-running a failed scaffold resumes cleanly.
 
 ```bash
 # start the embedding server (the -ub 2048 flag is REQUIRED — see Troubleshooting)
-LD_LIBRARY_PATH=/Disk_2/llama.cpp/build/bin /Disk_2/llama.cpp/build/bin/llama-server \
-  -m /Disk_bot/models/embeddings/bge-m3-Q4_K_M.gguf \
+llama-server -m /path/to/bge-m3.gguf \
   --port 8081 -c 8192 -ngl 999 --embedding -ub 2048 &
 curl http://localhost:8081/health   # → {"status":"ok"}
 ```
@@ -84,9 +111,10 @@ neuro-rag add_papers.py /path/to/pdf/dir/
 
 1. **Convert** PDFs → md (pymupdf4llm), keep md + PDF in durable storage.
 2. **Index** (batch, incremental): `neuro-rag add_papers.py <dir>`
-3. **Classify** article_type + topics: copy a `classify_*.py` from `scripts/`,
-   adapt the topic taxonomy to your domain, run in the background (~0.5 papers/s).
-   Feed title+abstract, not title alone — titles miss method papers.
+3. **Classify** article_type + topics with `scripts/classify_papers.py`
+   (works on any domain: pass `--domain-topics "your,seed,topics"`; ~0.5 papers/s,
+   run in the background). Feed title+abstract, not title alone — titles miss
+   method papers (`--md-dir` mode does this automatically).
 4. **Apply tags**: `neuro-rag scripts/apply_tags.py outputs/<name>_tags.csv`
    (writes `article_type` + `topic_<kw>:1` keys into chunk metadata).
 5. **Fill in** `<name>_rag/CONTEXT.md` with your domain vocabulary — the
@@ -97,15 +125,16 @@ Full procedures + pitfalls: Hermes skills `bib-rag-ingest` (write side) and
 
 ## Moving / backing up a library
 
-Libraries are plain folders — `mv` / `tar` / `rsync` as a unit. After moving,
-update one registry line in `src/kb_config.py` (root path) and the wrapper's
-`BIB_RAG_ROOT` default. Nothing else references the old location.
+Libraries are plain folders — `mv` / `tar` / `rsync` as a unit. `config.json`
+(machine/model settings) travels inside the folder, so bindings survive the move.
+After moving, update one registry line in `src/kb_config.py` (root path) and the
+wrapper's `BIB_RAG_ROOT` default. Nothing else references the old location.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ImportError: cannot import name 'builder' from 'google.protobuf.internal'` | system protobuf shadows user-site | use the wrappers, or prefix `PYTHONPATH=/home/rui/.local/lib/python3.10/site-packages` |
+| `ImportError: cannot import name 'builder' from 'google.protobuf.internal'` | system protobuf shadows user-site | use the wrappers, or prefix `PYTHONPATH=$HOME/.local/lib/python3.10/site-packages` |
 | `Collection [X] does not exist` | BIB_RAG_ROOT leaked from an earlier `export` | `unset BIB_RAG_ROOT BIB_RAG_COLLECTION`; use per-command env or wrappers |
 | embedding HTTP 500 `input too large... increase physical batch size` | 8081 running with default ubatch 512 | restart 8081 with `-ub 2048` (command above) |
 | `ModuleNotFoundError: chromadb` | bare `python3` (pyenv shim) | use `/usr/bin/python3.10 -B` |

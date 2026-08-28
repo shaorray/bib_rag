@@ -19,9 +19,10 @@ many libraries:
 ## Quick Start
 
 ```bash
-cd <this repo>
+# 0. Get the toolkit (if you haven't cloned it yet)
+git clone https://github.com/shaorray/bib_rag.git && cd bib_rag
 
-# 0. Prerequisites
+# 0b. Prerequisites
 #    a) Python dependencies (Python 3.10; see requirements.txt for details):
 pip install -r requirements.txt
 #    b) an OpenAI-compatible embedding server (bge-m3 recommended) — REQUIRED
