@@ -29,8 +29,8 @@ Why this exists (lessons from the old bib_rag_writer.py):
   - Old tool: searched with raw topic sentence → retrieved 5 papers
     about general "Eph signaling" → wrote generic paragraph.
   - Grill pre-step forces decisions like:
-      * Mechanism focus: repulsion / adhesion / tension / endocytosis?
-      * Tissue: hindbrain / somite / neural crest / generic?
+      * Mechanism focus: which process/model the paragraph is about?
+      * Context: which tissue/site/region/system (domain-specific)?
       * Model stance: support / critique / survey?
     → narrower query → 5x more relevant retrievals → tighter paragraph.
 
@@ -98,14 +98,14 @@ def load_context_glossary() -> Dict:
     """Parse CONTEXT.md into a usable glossary dict.
     
     Returns: {
-        "terms": {"eph receptor": "...", "repulsion": "..."},
+        "models": {"repulsion": "Taylor et al. 2017 + many", ...},
         "anti_patterns": [("eph kinase", "eph receptor"), ...],
-        "models": {"repulsion": "Taylor et al. 2017 + many", ...}
+        "spec_fields": [[name, question, choices], ...]   # from Grill Spec block
     }
     """
     if not CONTEXT_PATH.exists():
         print(f"⚠️  CONTEXT.md not found at {CONTEXT_PATH} — running without glossary constraints.")
-        return {"terms": {}, "anti_patterns": [], "models": {}}
+        return {"terms": {}, "anti_patterns": [], "models": {}, "spec_fields": []}
     
     text = CONTEXT_PATH.read_text()
     
@@ -135,38 +135,62 @@ def load_context_glossary() -> Dict:
         m = re.match(r'.*❌\s*"([^"]+)"\s*→\s*✅\s*"([^"]+)"', line)
         if m:
             anti_patterns.append((m.group(1), m.group(2)))
-    
+    # Grill Spec block (## Grill Spec + fenced JSON) — per-library SPEC_FIELDS
+    spec_fields = []
+    m = re.search(r"##\s*(?:\d+\.\s*)?Grill Spec[^\n]*\n+```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+    if m:
+        try:
+            parsed = json.loads(m.group(1))
+            spec_fields = [(f[0], f[1], f[2]) for f in parsed.get("fields", [])]
+        except Exception as e:
+            print(f"⚠️  CONTEXT.md Grill Spec block unparseable ({e}) — using defaults")
+            spec_fields = []
+
     return {
         "models": models,
         "anti_patterns": anti_patterns,
         "path": str(CONTEXT_PATH),
+        "spec_fields": spec_fields,
     }
 
 
 # ---------------------------------------------------------------------------
 # GrillSpec — the structured output of the grilling phase
 # ---------------------------------------------------------------------------
-SPEC_FIELDS = [
-    ("mechanism_focus", "Which mechanism is the paragraph about?",
-     ["repulsion", "adhesion", "cortical tension", "endocytosis", "bidirectional signaling", "cis-interaction", "survey (all)"]),
-    ("tissue", "Which tissue/developmental context?",
-     ["generic", "hindbrain rhombomeres", "neural crest", "somites", "vesicle", "cell culture (in vitro)", "gastrulation", "organogenesis"]),
-    ("model_stance", "What stance should the paragraph take?",
-     ["support repulsion model (Taylor et al.)",
-      "critique differential adhesion model",
-      "support cortical tension model (O'Neill et al.)",
-      "support endocytosis model",
-      "neutral survey of all models",
-      "extend existing model with new evidence"]),
-    ("organism", "Which organism(s) to focus on?",
-     ["mouse", "chick", "zebrafish", "Xenopus", "Drosophila", "C. elegans", "human", "in vitro only", "all"]),
+# ---------------------------------------------------------------------------
+# SPEC_FIELDS — generic defaults; per-library overrides come from CONTEXT.md.
+#
+# A library's CONTEXT.md may carry a fenced JSON block like:
+#
+#     ## Grill Spec
+#     ```json
+#     {"fields": [
+#        ["mechanism_focus", "Which mechanism?",
+#         ["repulsion", "adhesion", "survey"]],
+#        ["tissue", "Which context?", ["generic", "hindbrain rhombomeres"]]
+#      ]}
+#     ```
+#
+# Field names below are the schema keys the pipeline consumes
+# (build_scoped_query uses mechanism_focus/tissue/organism; synthesize_with_spec
+# uses mechanism_focus/tissue/model_stance/paragraph_length/stance_phrasing).
+# Libraries may rename CHOICES freely; renaming KEYS requires updating those
+# two functions.
+# ---------------------------------------------------------------------------
+DEFAULT_SPEC_FIELDS = [
+    ("mechanism_focus", "Which mechanism/process is the paragraph about?", []),
+    ("tissue_context", "Which tissue/site/developmental or geological context?",
+     ["generic", "all"]),
+    ("model_stance", "What stance should the paragraph take?", []),
+    ("organism", "Which organism(s)/system(s) to focus on?",
+     ["all"]),
     ("year_range", "Citation year range filter?",
      ["all years", "last 5 years", "last 10 years", "classic (>2010)", "specific (specify)"]),
     ("evidence_type", "What kind of evidence should we lean on?",
-     ["in vivo (mouse/chick/zebrafish)",
-      "in vitro (cell culture, co-culture assays)",
+     ["field observations",
+      "experimental/lab data",
       "computational/modeling",
-      "biochemistry (binding kinetics, structure)",
+      "remote sensing/imaging",
       "balanced mix"]),
     ("paragraph_length", "How long should the paragraph be?",
      ["short (~150 words, 1-2 citations)",
@@ -177,8 +201,21 @@ SPEC_FIELDS = [
 ]
 
 
-def empty_spec() -> Dict:
-    return {f[0]: None for f in SPEC_FIELDS}
+def load_spec_fields(glossary: Dict):
+    """Per-library SPEC_FIELDS from CONTEXT.md 'Grill Spec' JSON block, merged
+    onto the generic defaults (unknown library fields are appended; library
+    values override defaults field-by-field)."""
+    fields = {name: (name, q, ch) for name, q, ch in DEFAULT_SPEC_FIELDS}
+    spec_block = glossary.get("spec_fields")
+    if spec_block:
+        for name, question, choices in spec_block:
+            fields[name] = (name, question, choices)
+    # legacy eph field name mapping (tissue_context was 'tissue' in Eph specs)
+    return list(fields.values())
+
+
+def empty_spec(spec_fields) -> Dict:
+    return {f[0]: None for f in spec_fields}
 
 
 def ask_one_question(field_name: str, question: str, choices) -> Optional[str]:
@@ -209,59 +246,74 @@ def ask_one_question(field_name: str, question: str, choices) -> Optional[str]:
         return raw
 
 
-def interactive_grill(topic: str) -> Dict:
+def interactive_grill(topic: str, spec_fields) -> Dict:
     """Run the interactive grill (one question at a time)."""
     print(f"\n{'='*70}")
-    print(f"🥩 PHASE A: GRILL — locking down scope before searching bib_rag")
+    print(f"🥩 PHASE A: GRILL — locking down scope before searching the library")
     print(f"{'='*70}")
     print(f"\nTopic: '{topic}'")
-    print(f"\nI'll ask {len(SPEC_FIELDS)} questions. For each, pick a number")
+    print(f"\nI'll ask {len(spec_fields)} questions. For each, pick a number")
     print(f"or 's' to skip. You can also pass --auto to let an LLM fill these in.")
-    
-    spec = empty_spec()
+
+    spec = empty_spec(spec_fields)
     spec["raw_topic"] = topic
     spec["grilled_at"] = datetime.now().isoformat()
     spec["mode"] = "interactive"
-    
-    for fname, question, choices in SPEC_FIELDS:
+
+    for fname, question, choices in spec_fields:
         answer = ask_one_question(fname, question, choices)
         spec[fname] = answer
-    
+
     return spec
 
 
-def auto_grill(topic: str, glossary: Dict) -> Dict:
+def _spec_choices(spec_fields, name):
+    """Choices list for a field from the active spec_fields ([] = freeform)."""
+    for fname, _, choices in spec_fields:
+        if fname == name:
+            return choices if isinstance(choices, list) else []
+    return []
+
+
+def auto_grill(topic: str, glossary: Dict, spec_fields) -> Dict:
     """Auto-fill the spec using an LLM that has read CONTEXT.md.
-    
+
     Use this when you want a fast pass and don't need a human in the loop.
     """
     print(f"\n🤖 PHASE A (auto): LLM is filling in the spec from CONTEXT.md…")
-    
+
     context_snippet = ""
     if glossary.get("path"):
         ctx = Path(glossary["path"]).read_text()
         context_snippet = f"\n\n# DOMAIN GLOSSARY (CONTEXT.md excerpt):\n{ctx[:3000]}\n"
-    
-    models_list = ", ".join(glossary.get("models", {}).keys()) or "repulsion, adhesion, tension, endocytosis"
-    
-    prompt = f"""You are filling in a structured spec for an academic paragraph about Eph/ephrin signaling.
+
+    models_list = ", ".join(glossary.get("models", {}).keys()) or "(none listed)"
+    # field schema for the prompt, generated from the ACTIVE spec_fields
+    keys_line = ", ".join(f for f, _, _ in spec_fields if f != "stance_phrasing") + ", stance_phrasing (optional)"
+    constraints = []
+    for fname, _, choices in spec_fields:
+        if fname in ("stance_phrasing", "paragraph_length", "year_range", "evidence_type"):
+            continue
+        if choices:
+            constraints.append(f"- {fname} SHOULD be one of: " + ", ".join(map(str, choices)))
+    constraints.append("- paragraph_length MUST be one of: short, medium, long")
+    constraints_txt = "\n".join(constraints)
+
+    prompt = f"""You are filling in a structured spec for an academic paragraph grounded in this library's domain.
 
 # TOPIC (raw):
 {topic}
 
-# AVAILABLE MODELS:
+# DOMAIN MODELS (from CONTEXT.md):
 {models_list}
 {context_snippet}
 
 # INSTRUCTIONS:
 Output a JSON object with these exact keys (use null for any field you cannot confidently determine from the topic):
-  mechanism_focus, tissue, model_stance, organism, year_range, evidence_type, paragraph_length, stance_phrasing
+  {keys_line}
 
 Constraints:
-- mechanism_focus MUST be one of: repulsion, adhesion, cortical tension, endocytosis, bidirectional signaling, cis-interaction, survey
-- model_stance MUST be one of: "support repulsion model", "critique differential adhesion", "support cortical tension model", "support endocytosis model", "neutral survey", "extend existing model"
-- tissue MUST be one of: generic, hindbrain rhombomeres, neural crest, somites, otic vesicle, cell culture (in vitro), Drosophila
-- paragraph_length MUST be one of: short, medium, long
+{constraints_txt}
 
 Output ONLY the JSON, no markdown fences, no commentary."""
 
@@ -280,7 +332,7 @@ Output ONLY the JSON, no markdown fences, no commentary."""
     except Exception as e:
         print(f"⚠️  auto-grill failed: {e}")
         print(f"   Falling back to interactive.")
-        return interactive_grill(topic)
+        return interactive_grill(topic, spec_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +346,8 @@ def build_scoped_query(topic: str, spec: Dict) -> str:
     topic_words = set(topic.lower().split())
     parts = [topic]
     seen = set(topic_words)
-    for hint in [spec.get("mechanism_focus"), spec.get("tissue"), spec.get("organism")]:
+    for hint in [spec.get("mechanism_focus"), spec.get("tissue_context") or spec.get("tissue"),
+                 spec.get("organism")]:
         if hint and hint != "generic" and hint != "all":
             hint_words = set(hint.lower().split())
             # Only add if it brings new info
@@ -416,15 +469,16 @@ def main():
         parser.error("Provide a topic or --spec <path>")
 
     glossary = load_context_glossary()
+    spec_fields = load_spec_fields(glossary)
 
     # PHASE A: GRILL
     if args.spec:
         spec = json.loads(Path(args.spec).read_text())
         print(f"📋 Loaded spec from {args.spec}")
     elif args.auto:
-        spec = auto_grill(args.topic, glossary)
+        spec = auto_grill(args.topic, glossary, spec_fields)
     else:
-        spec = interactive_grill(args.topic)
+        spec = interactive_grill(args.topic, spec_fields)
 
     # Save spec (always — enables resumption)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -436,7 +490,7 @@ def main():
     print(f"\n{'='*70}")
     print(f"LOCKED SPEC:")
     print(f"{'='*70}")
-    for fname, _, _ in SPEC_FIELDS:
+    for fname, _, _ in spec_fields:
         print(f"  {fname}: {spec.get(fname)}")
     print(f"{'='*70}")
 
@@ -491,9 +545,9 @@ def synthesize_with_spec(passages: List[Dict], spec: Dict, glossary: Dict) -> st
     context = "\n\n---\n\n".join(ctx_blocks)
 
     stance = spec.get("stance_phrasing") or "review evidence for the mechanism of interest"
-    mechanism = spec.get("mechanism_focus", "repulsion")
-    tissue = spec.get("tissue", "generic")
-    model = spec.get("model_stance", "neutral survey")
+    mechanism = spec.get("mechanism_focus") or "the mechanism of interest"
+    tissue = spec.get("tissue_context") or spec.get("tissue") or "the general context"
+    model = spec.get("model_stance") or "neutral survey"
     length = spec.get("paragraph_length", "medium")
     word_target = {"short": 150, "medium": 250, "long": 400}.get(length, 250)
 
@@ -504,7 +558,7 @@ def synthesize_with_spec(passages: List[Dict], spec: Dict, glossary: Dict) -> st
         for bad, good in glossary["anti_patterns"][:6]:
             anti += f"- Use '{good}', NOT '{bad}'\n"
 
-    prompt = f"""Write a {length} academic paragraph (~{word_target} words) about Eph/ephrin signaling.
+    prompt = f"""Write a {length} academic paragraph (~{word_target} words) grounded in this library's domain.
 
 # LOCKED SCOPE (do not deviate):
 - Mechanism focus: {mechanism}
@@ -522,7 +576,7 @@ def synthesize_with_spec(passages: List[Dict], spec: Dict, glossary: Dict) -> st
 - If a claim isn't supported by the retrieved passages, do NOT include it
 
 # STYLE:
-- Use the exact vocabulary from CONTEXT.md (e.g. "cell segregation", "boundary formation", "heterotypic repulsion")
+- Use the exact vocabulary defined in CONTEXT.md for this library
 - Be specific about cell type / tissue / organism when passages support it
 
 Write ONLY the paragraph (no headers, no preamble)."""
@@ -546,10 +600,9 @@ Write ONLY the paragraph (no headers, no preamble)."""
             f"[LLM synthesis unavailable: {e}]\n\n"
             f"Evidence-based summary: " + " ".join(claims) +
             f" These findings are consistent with the locked spec "
-            f"({spec.get('mechanism_focus', 'repulsion')}-mediated "
-            f"{spec.get('tissue', 'tissue')} boundary formation, "
-            f"in support of {spec.get('model_stance', 'the repulsion model')})."
-        )
+            f"(mechanism_focus={spec.get('mechanism_focus') or 'unspecified'}, "
+            f"tissue={spec.get('tissue_context') or spec.get('tissue') or 'general'}, "
+            f"stance={spec.get('model_stance') or 'neutral'}).")
         return fallback
 
 
