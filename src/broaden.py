@@ -51,9 +51,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# S3 weak-best-score: calibrated 2026-08-29 against the live eph_rag corpus
+# (470,947 children, bge-m3). Empirical best-sim distribution over 15 probe
+# queries: garbage/nonsense 0.49-0.53; sparse-but-real topic queries
+# 0.56-0.61; strongly on-topic 0.62-0.73. The old 0.40 NEVER fired (dead
+# safeguard); 0.62 clipped real borderline queries. 0.54 separates the
+# noise floor from the weakest real hits with margin on both sides.
+# Env knob: BROADEN_MIN_SIM.
 MIN_RESULTS = _env_int("BROADEN_MIN_RESULTS", 2)
 MIN_CHARS = _env_int("BROADEN_MIN_CHARS", 300)
-MIN_SIM = _env_float("BROADEN_MIN_SIM", 0.40)
+MIN_SIM = _env_float("BROADEN_MIN_SIM", 0.54)
 MIN_NARRATIVE = _env_float("BROADEN_MIN_NARRATIVE", 0.30)
 
 # Matches prose sentences (>=3 words, mostly letters); tables/lists/refs

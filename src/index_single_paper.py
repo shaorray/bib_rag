@@ -167,6 +167,21 @@ def index_paper(md_path):
         cp['processed'].append(md_path.name)
     atomic_json_dump(cp, CHECKPOINT_FILE)
 
+    # Update the FTS5 (BM25) index so the new paper is visible to the hybrid
+    # BM25 channel immediately. Without this, a freshly indexed paper is only
+    # reachable via dense vector search until the next full FTS rebuild
+    # (silent half-indexing — caught in the 2026-08-29 module audit).
+    try:
+        try:
+            from .hybrid_search import HybridIndex
+        except ImportError:  # src/ on sys.path directly (CLI)
+            from hybrid_search import HybridIndex
+        HybridIndex().upsert_source(md_path.name)
+        print(f"  FTS (BM25) index updated for {md_path.name}")
+    except Exception as e:
+        # Non-fatal: the hybrid layer degrades to dense-only.
+        print(f"  ⚠️ FTS upsert failed (BM25 will miss this paper): {e}")
+
     # Update metadata
     if os.path.exists(METADATA_LOG):
         with open(METADATA_LOG, 'r') as f:

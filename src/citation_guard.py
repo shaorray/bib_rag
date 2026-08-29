@@ -199,7 +199,12 @@ def parent_ids_from_keys(retrieval_keys: Set[str]) -> Set[str]:
     return out
 
 
-_PARENT_ID_IN_TEXT_RE = re.compile(r"Parent ID:\s*(\S+)")
+# Matches "Parent ID: <id>" lines in tool output. The id may CONTAIN SPACES
+# (parent_id format '<filename with spaces>.md#<section>#<hash>'), so capture
+# to end-of-line, not \S+ — a \S+ capture truncates at the first space and
+# yields bare author surnames ('Das', 'Himanen'), which then pollute the
+# parent:: whitelist as unresolvable garbage keys.
+_PARENT_ID_IN_TEXT_RE = re.compile(r"Parent ID:\s*(.+?)\s*$", re.M)
 
 # ToolMessage name → treat as retrieval evidence (search results carry
 # "Parent ID:" lines even when the agent never called retrieve_parent_chunks)
@@ -293,11 +298,20 @@ def resolve_source_lines(source_lines: List[str],
     resolved = []
     for line in source_lines:
         pid = None
-        # Strategy 1: literal parent id substring
-        for k in known_parent_ids:
-            if k and k in line:
-                pid = k
-                break
+        # Strategy 1: literal parent id substring. Real ids contain '#'
+        # ('<source>#<section>#<hash>'); requiring it prevents short
+        # fragments (e.g. author surnames harvested from malformed tool
+        # calls) from spuriously matching any 'X et al.' citation line.
+        if any("#" in k for k in known_parent_ids):
+            for k in known_parent_ids:
+                if "#" in k and k and k in line:
+                    pid = k
+                    break
+        else:
+            for k in known_parent_ids:
+                if k and len(k) >= 8 and k in line:
+                    pid = k
+                    break
         # Strategy 2: filename citation → source prefix of a known parent_id
         if pid is None:
             # candidates: markdown-ish tokens ending in .md/.pdf/.txt/.docx

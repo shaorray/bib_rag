@@ -340,9 +340,15 @@ def should_compress_context(state: AgentState) -> Command[Literal["compress_cont
                 if tc["name"] == "retrieve_parent_chunks":
                     raw = tc["args"].get("parent_id") or tc["args"].get("id") or tc["args"].get("ids") or []
                     if isinstance(raw, str):
-                        new_ids.add(f"parent::{raw}")
-                    else:
-                        new_ids.update(f"parent::{r}" for r in raw)
+                        raw = [raw]
+                    # Real parent ids look like '<source>#<section>#<hash>'.
+                    # Models occasionally pass author surnames or titles here
+                    # (tool then returns NO_PARENT_DOCUMENT); ledgering those
+                    # pollutes the whitelist AND makes the harvest gate below
+                    # believe real keys already exist, so ToolMessage
+                    # harvesting is skipped and genuine ids never land.
+                    new_ids.update(f"parent::{r}" for r in raw
+                                   if isinstance(r, str) and "#" in r)
 
                 elif tc["name"] == "search_child_chunks":
                     query = tc["args"].get("query", "")

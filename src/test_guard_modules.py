@@ -540,14 +540,27 @@ def test_broaden_signals():
     weak = [{"text": "Fig 3a | 45.2 | 12.1 |", "similarity": 0.31}]
     weak_ok, weak_reasons = should_broaden(retrieval_metrics(weak))
     assert weak_ok and len(weak_reasons) >= 2
-    # strong: prose chunks with decent similarity
+    # strong: prose chunks with decent similarity — represents a HEALTHY
+    # result, so must pass with realistic live-corpus scores. Garbage
+    # queries floor at ~0.49-0.53; real queries hit 0.56+ (see broaden.py
+    # MIN_SIM calibration note). Use well-above-threshold sims here.
     strong = [{"text": "Ephb1 mutant embryos show failed axon guidance at the "
                        "midline of the developing hindbrain. " * 2,
-               "similarity": 0.52},
+               "similarity": 0.66},
               {"text": "In contrast, ephrin-B1 Fc clustering rescued the "
                        "repulsive response robustly in explant cultures. " * 2,
-               "similarity": 0.48}]
+               "similarity": 0.64}]
     assert not should_broaden(retrieval_metrics(strong))[0]
+    # borderline-real: sparse topic must not trip S3 alone; give it enough
+    # chars that only S3 is in play (live sparse queries score ~0.58 best)
+    borderline = [{"text": "Guidance of the pronephric duct involves repulsive "
+                           "cues from the somitic mesoderm during migration and "
+                           "epithelial tubule extension. " * 2,
+                   "similarity": 0.58},
+                  {"text": "In zebrafish, Wnt11r signaling polarizes the "
+                           "pronephric duct cells as they migrate rostrally. " * 2,
+                   "similarity": 0.57}]
+    assert not should_broaden(retrieval_metrics(borderline))[0]
     # ladder: attempt 0 → widen only; attempt 1 → +or-split; attempt 2 → stop
     p0 = plan_broadening("q", True, 0)
     p1 = plan_broadening("q", True, 1)
@@ -1111,6 +1124,45 @@ def test_retrieval_keys_harvest_parent_ids_from_search_results():
     assert "parent::Davy_et_al_2004_Ephrin-B1_md#results#abc123" in keys, sorted(keys)
     assert any(k.startswith("search::") for k in keys), keys
     print("  ✓ retrieval ledger: parent:: keys harvested from search ToolMessages")
+
+
+def test_retrieval_keys_reject_malformed_parent_args():
+    """When the model calls retrieve_parent_chunks with garbage args (author
+    surnames etc. → tool returns NO_PARENT_DOCUMENT), the ledger must NOT
+    record parent::<garbage>: such keys pollute the whitelist AND satisfy the
+    harvest gate, so genuine 'Parent ID:' lines from ToolMessages never land.
+    Regression: live Qwen run produced parent::Kim/parent::Das/... keys and
+    evaluate.citation_faithfulness resolved every Sources line via bare
+    substring match (fake whitelist_rate 1.0, empty lexical_scores)."""
+    import src.agent_nodes as an_mod
+    from src.agent_nodes import should_compress_context
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    msgs = [
+        AIMessage(content="", tool_calls=[{
+            "name": "search_child_chunks",
+            "args": {"query": "Eph receptor axon guidance"}, "id": "t1"}]),
+        ToolMessage(content=(
+            "--- RESULT 1 (similarity: 0.611, channels: vec) ---\n"
+            "Parent ID: Davy_et_al_2004_Ephrin-B1_md#results#abc123\n"
+            "Content: ..."), name="search_child_chunks", tool_call_id="t1"),
+        AIMessage(content="", tool_calls=[{
+            "name": "retrieve_parent_chunks",
+            "args": {"parent_id": "Kim"}, "id": "t2"}]),  # garbage arg
+        ToolMessage(content="NO_PARENT_DOCUMENT: Kim",
+                    name="retrieve_parent_chunks", tool_call_id="t2"),
+    ]
+    state = {"messages": list(msgs), "retrieval_keys": set()}
+    saved = an_mod.MAX_ITERATIONS
+    an_mod.MAX_ITERATIONS = 10  # force the token-threshold branch
+    try:
+        cmd = should_compress_context(state)
+    finally:
+        an_mod.MAX_ITERATIONS = saved
+    keys = cmd.update["retrieval_keys"]
+    assert not any(k == "parent::Kim" for k in keys), sorted(keys)
+    assert "parent::Davy_et_al_2004_Ephrin-B1_md#results#abc123" in keys, sorted(keys)
+    print("  ✓ retrieval ledger: malformed parent args rejected, harvest gate not fooled")
 
 
 

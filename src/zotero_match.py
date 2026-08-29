@@ -90,7 +90,10 @@ def doi_match(query_doi: str, cand_doi: str) -> Optional[bool]:
     Two-tier: exact canonical equality → True; shared registrant prefix
     (≥8 chars) → True (suffix drift tolerated); clear divergence → False.
     """
-    from identifiers import normalize_doi, doi_prefix_agree
+    try:
+        from .identifiers import normalize_doi, doi_prefix_agree
+    except ImportError:  # src/ on sys.path directly (CLI/tests)
+        from identifiers import normalize_doi, doi_prefix_agree
     nq, nc = normalize_doi(query_doi), normalize_doi(cand_doi)
     if not nq or not nc:
         return None

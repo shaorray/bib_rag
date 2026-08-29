@@ -267,8 +267,28 @@ class ToolFactory:
                                     alt_fused = alt_entries
                                 alt_metrics = retrieval_metrics(alt_entries)
                                 alt_weak, _ = should_broaden(alt_metrics)
-                                # keep the better of the two passes
-                                if not alt_weak or (len(alt_fused) > len(fused)):
+                                # keep the better of the two passes.
+                                # NOTE: rrf_fuse dedups by parent_id, so a
+                                # "wider" search may FUSE to fewer entries
+                                # than the first pass (parent-level dupes);
+                                # a weak alt with equalish size must still
+                                # win when the FIRST pass was the one judged
+                                # weak — otherwise the widened re-search can
+                                # never replace it and [BROADENED] never
+                                # fires. Prefer the alt whenever it is not
+                                # itself weak; fall back to a raw-count win.
+                                if not alt_weak or (len(alt_fused) > len(fused)) \
+                                        or (alt_weak and len(reasons) == 1
+                                            and reasons[0].startswith("weak-best-score")
+                                            and alt_metrics.get("best_similarity")
+                                            and alt_metrics["best_similarity"]
+                                            >= metrics.get("best_similarity", 0)):
+                                    # alt is no worse on the triggering signal
+                                    # (same-or-better best similarity) → swap
+                                    # so the [BROADENED] header still reaches
+                                    # the agent (it signals "first pass was
+                                    # weak, results widened"). Size tie-break
+                                    # remains the raw-count fallback.
                                     fused = alt_fused[:limit]
                                     return self._format_results(
                                         fused, broadened=True,

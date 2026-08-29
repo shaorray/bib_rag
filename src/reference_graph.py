@@ -47,6 +47,11 @@ except ImportError:  # direct script execution (scripts/build_reference_graph.py
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from kb_config import get_config
 
+try:
+    from .identifiers import normalize_doi
+except ImportError:  # src/ on sys.path directly (CLI/tests)
+    from identifiers import normalize_doi
+
 # ---------------------------------------------------------------------------
 # Extraction regexes
 # ---------------------------------------------------------------------------
@@ -185,7 +190,6 @@ def _resolve_source(graph: Dict, source_or_title: str) -> Optional[str]:
     "https://doi.org/10.1016/..." in the graph metadata matches a bare
     "10.1016/..." query (seerai identifier-normalization mechanism).
     """
-    from identifiers import normalize_doi
     if source_or_title in graph["papers"]:
         return source_or_title
     q = source_or_title.lower().strip()
@@ -207,7 +211,25 @@ def _resolve_source(graph: Dict, source_or_title: str) -> Optional[str]:
         return hits[0]
     if hits:
         return hits[0]  # ambiguous → closest first, caller sees the count
+    # filename convention bridge: chroma `source` = "x.md" but graph keys are
+    # parent-store stems "x_md" (and vice versa). Agents pass what search
+    # results show (Parent ID contains "x.md#..."), so try both variants.
+    for variant in (q.replace(".md", "_md"), q.replace("_md", ".md"),
+                    q.replace(".md", "_md.json").replace(".json", "")):
+        if variant in graph["papers"]:
+            return variant
+    v_hits = [src for src in graph["papers"]
+              if variant_ok(q, src)]
+    if len(v_hits) == 1:
+        return v_hits[0]
     return None
+
+
+def variant_ok(q: str, src: str) -> bool:
+    """Fuzzy containment tolerant of the .md <-> _md convention."""
+    qn = q.lower().replace(".md", "_md").replace(".json", "")
+    sn = src.lower().replace(".md", "_md").replace(".json", "")
+    return qn in sn or sn in qn
 
 
 def snowball(graph: Dict, source_or_title: str,
