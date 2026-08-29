@@ -62,7 +62,17 @@ def is_local_llm() -> bool:
     return model.endswith(".gguf") or ":5015" in llm_url
 
 
-BASE_TOKEN_THRESHOLD = 2000
+# Context-compression trigger. A local 4096-token slot needs aggressive
+# compression; a cloud model (128k window) does NOT. With agent_tools budgets
+# capping each tool round at ~5-8KB, a full 10-round loop stays ≈ 60-80KB ≈
+# 15-20k tokens — so a 2000-token (8KB) threshold fired on nearly EVERY cloud
+# query, usually on iteration 2. Measured cost of that premature compress:
+# one slow LLM call (~2-9s) + the raw evidence is wiped from `messages`, which
+# forced 2-3 wasted re-search rounds (3+ extra LLM calls) and still degraded
+# the answer into fallback_response. Cloud threshold sits far above anything a
+# bounded loop can produce, so compression only fires on genuinely huge
+# evidence piles — where it is actually useful.
+BASE_TOKEN_THRESHOLD = 2000 if is_local_llm() else 20000
 TOKEN_GROWTH_FACTOR = 0.9
 
 
