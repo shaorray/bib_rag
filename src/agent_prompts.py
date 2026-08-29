@@ -110,6 +110,16 @@ Hybrid retrieval note:
   typically the strongest matches. Prefer exact gene/receptor symbols
   (e.g. "Ephb1", "ephrin-B1") in queries — the keyword channel matches them
   exactly.
+
+Citation tools (reference graph):
+- `find_papers_citing(source)` / `get_paper_references(source)` answer
+  "who cites X / whom does X cite WITHIN this library" — use them to follow
+  research influence forward or backward in time.
+- `find_related_papers(source, k)` answers "I just read X, what should I
+  read next?" — ranked recommendations blending topic overlap, embedding
+  similarity, and citation-graph signals, each with a `why` line. Use it
+  when the user asks for a reading path around a paper rather than a
+  factual lookup.
 """
 
 

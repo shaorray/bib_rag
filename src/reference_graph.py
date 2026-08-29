@@ -93,6 +93,7 @@ def _iter_parent_store():
             "title": meta.get("title", ""),
             "year": meta.get("year", ""),
             "doi": meta.get("doi", ""),
+            "authors": meta.get("authors", ""),
         }
 
 
@@ -248,9 +249,16 @@ def snowball(graph: Dict, source_or_title: str,
     matches: List[dict] = []
 
     if direction == "forward":  # papers IN the library citing `src`
-        title_tokens = _title_key(papers.get(src, {}).get("title", ""))
+        qmeta = papers.get(src, {})
+        title_tokens = _title_key(qmeta.get("title", ""))
+        # first-author surnames of the QUERIED paper ("Lecuit T; Yap AS"
+        # parent-store format) — in-text edges are matched against THESE,
+        # never against the citing paper's own name (self-mention trap).
+        q_surnames = {a.split()[0].split(",")[0].lower()
+                      for a in (qmeta.get("authors", "") or "").split(";")
+                      if a.strip()}
         for e in graph["edges"]:
-            if e["from"] == src or e["to_author"] == "":
+            if e["from"] == src or (not e["to_author"] and not e.get("to_title_hint")):
                 continue
             hit = None
             # strong: title hint overlaps target title
@@ -259,14 +267,16 @@ def snowball(graph: Dict, source_or_title: str,
                 inter = len(hint_tokens & title_tokens)
                 if title_tokens and inter >= max(2, len(title_tokens) // 3):
                     hit = e["from"]
-            # weaker: same author+year as the paper's first author+year
-            if hit is None:
-                pm = by_source.get(e["from"], {})
-                if (e["to_year"] and pm.get("year") == e["to_year"]):
-                    first_author = (pm.get("title", "").split()[0]
-                                    if pm.get("title") else "")
-                    if first_author and first_author.lower().startswith(e["to_author"].lower()[:4]):
+            # weaker: edge (author, year) matches the QUERY paper's
+            # first-author surname + year. Skip when the query paper has no
+            # usable author metadata (filename-style titles, see meta_audit).
+            q_year = str(qmeta.get("year", "") or "")
+            if hit is None and q_surnames and e["to_year"] \
+                    and (e["to_year"] == q_year or not q_year):
+                for a in q_surnames:
+                    if a and e["to_author"].lower().startswith(a[:4]):
                         hit = e["from"]
+                        break
             if hit:
                 matches.append({"source": hit,
                                 "title": by_source.get(hit, {}).get("title", ""),

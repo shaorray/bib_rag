@@ -529,6 +529,85 @@ def test_reference_graph_doi_resolution(tmpdir):
     print("  ✓ reference_graph: DOI-based paper resolution")
 
 
+def test_snowball_forward_no_self_mention_trap(tmpdir):
+    """Regression: forward snowball must match (author, year) edges against
+    the QUERY paper's authors — not the citing paper's own name. Before the
+    fix, any paper whose in-text body mentioned its own authors+year
+    ('Harrison et al. (2010)' inside Harrison_2010_two_step.md) was reported
+    as citing EVERY query paper with a filename-style first token."""
+    import src.reference_graph as rg
+    graph = {
+        "papers": {
+            # query: real paper, authors known
+            "25925582_md": {"title": ("E-cadherin junctions as active "
+                                      "mechanical integrators"),
+                            "year": "2015",
+                            "authors": "Lecuit T; Yap AS"},
+            # self-mention trap: filename-style title, body cites own name
+            "Harrison_2010_two_step_md": {"title": "Harrison_2010_two_step",
+                                          "year": "2009", "authors": ""},
+            # genuine citing paper
+            "28329679_md": {"title": "Mechanics of epithelial monolayers",
+                            "year": "2017",
+                            "authors": "Benham-Pyle BW; Pruitt BL"},
+        },
+        "edges": [
+            # Harrison_2010 mentions its own (Harrison, 2009) — must NOT match
+            {"from": "Harrison_2010_two_step_md", "to_raw": "Harrison (2009)",
+             "to_author": "Harrison", "to_year": "2009",
+             "to_title_hint": "", "direction": "cites"},
+            # 28329679 cites (Lecuit and Yap, 2015) — MUST match
+            {"from": "28329679_md", "to_raw": "Lecuit and Yap (2015)",
+             "to_author": "Lecuit", "to_year": "2015",
+             "to_title_hint": "", "direction": "cites"},
+            # 28329679 cites (Yap et al., 2015) — MUST also match (2nd surname)
+            {"from": "28329679_md", "to_raw": "Yap et al. (2015)",
+             "to_author": "Yap", "to_year": "2015",
+             "to_title_hint": "", "direction": "cites"},
+        ],
+    }
+    r = rg.snowball(graph, "25925582_md", "forward", limit=10)
+    srcs = [m["source"] for m in r["matches"]]
+    assert "Harrison_2010_two_step_md" not in srcs, \
+        f"self-mention trap leaked through: {srcs}"
+    assert "28329679_md" in srcs, f"genuine citer missed: {srcs}"
+    print("  ✓ reference_graph: forward snowball ignores citing-paper name "
+          "(self-mention trap)")
+
+
+def test_snowball_forward_no_author_metadata_is_silent(tmpdir):
+    """Query paper without an `authors` field (filename-style meta) must
+    produce ZERO author-year matches — silence beats false positives.
+    Title-hint matches still work."""
+    import src.reference_graph as rg
+    graph = {
+        "papers": {
+            "Harrison_2011_adherens_junction_md": {
+                "title": "Harrison_2011_adherens_junction",
+                "year": "2010", "authors": ""},
+            "citer_md": {"title": "Alpha-catenin mechanics", "year": "2012",
+                         "authors": "Drees F"},
+        },
+        "edges": [
+            # author-year only — cannot be attributed without query authors
+            {"from": "citer_md", "to_raw": "Harrison (2010)",
+             "to_author": "Harrison", "to_year": "2010",
+             "to_title_hint": "", "direction": "cites"},
+            # title hint — strong channel, MUST survive
+            {"from": "citer_md", "to_raw": "…adherens junction structure…",
+             "to_author": "Weis", "to_year": "2012",
+             "to_title_hint": "adherens junction structure and mechanics",
+             "direction": "cites"},
+        ],
+    }
+    r = rg.snowball(graph, "Harrison_2011_adherens_junction_md",
+                    "forward", limit=10)
+    srcs = [m["source"] for m in r["matches"]]
+    assert srcs == ["citer_md"], f"expected only the title-hint hit, got {srcs}"
+    print("  ✓ reference_graph: author-year channel silent without query "
+          "authors; title hints still match")
+
+
 # ---------------------------------------------------------------------------
 # B1: broadened retry signals
 # ---------------------------------------------------------------------------

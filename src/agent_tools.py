@@ -402,6 +402,41 @@ class ToolFactory:
         except Exception as e:
             return f"SNOWBALL_ERROR: {str(e)}"
 
+    def related_papers(self, source: str, k: int = 8) -> str:
+        """"I just read X, what should I read next?" — ranked recommendations.
+
+        Blends three signals: topic-keyword Jaccard (chroma `topics`),
+        title+lead embedding cosine (bge-m3), and the citation-graph signal
+        (in-library forward citations + bibliographic coupling).
+        """
+        try:
+            try:
+                from .related_papers import find_related
+            except ImportError:  # src/ on sys.path directly (CLI/tests)
+                from related_papers import find_related
+            result = find_related(source, k=k)
+            if result.get("error"):
+                return f"RELATED_ERROR: {result['error']}"
+            matches = result.get("matches", [])
+            if not matches:
+                return (f"NO_MATCHES: no related papers found for "
+                        f"'{source}' — every candidate scored below threshold.")
+            lines = [f"--- RELATED PAPERS for '{result['query']}' "
+                     f"({result.get('title', '')[:70]}) ---"]
+            for i, m in enumerate(matches, 1):
+                lines.append(
+                    f"{i}. [{m.get('article_type') or '?'}] "
+                    f"score={m['score']:.3f} "
+                    f"(topics={m['topic_j']:.2f} emb={m['emb_cos']:.2f} "
+                    f"graph={m['graph']:.2f}) "
+                    f"{m['source']} ({m.get('year', 'n.d.')})\n"
+                    f"   {m.get('title', '')[:100]}\n"
+                    f"   why: {m.get('why', '')}"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"RELATED_ERROR: {str(e)}"
+
 
 from langchain_core.tools import tool
 
@@ -437,8 +472,13 @@ def create_tools(collection=None):
         """Citation snowballing (backward): list the references of the given paper that are themselves in the knowledge base. Pass a source filename or paper title (fuzzy). Returns raw reference strings plus resolution to library papers when possible."""
         return factory.snowball_search(source, direction="backward")
 
+    @tool
+    def find_related_papers(source: str, k: int = 8) -> str:
+        """Recommend papers related to a given library paper — "I just read X, what should I read next?". Pass a source filename, PMID-stem, or title fragment. Blends topic overlap, embedding similarity, and citation-graph signals; each hit carries a machine-readable `why` (shared topics, cites-it, bibliographic coupling). Use to build reading paths around a seed paper."""
+        return factory.related_papers(source, k=k)
+
     return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents,
-            find_papers_citing, get_paper_references]
+            find_papers_citing, get_paper_references, find_related_papers]
 
 
 if __name__ == "__main__":
