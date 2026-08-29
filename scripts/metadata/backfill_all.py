@@ -68,7 +68,12 @@ def papers_needing_fix(limit=0):
         # heuristic noise signature: title looks like a journal header
         noisy = bool(title) and any(
             c.isdigit() for c in title[:12]) and ("(" in title[:40])
-        if not doi or not title or noisy:
+        # Candidacy = a real metadata GAP (no DOI, or no title). A noisy title
+        # ALONE is not a gap: e.g. 'Ca(2+) signalling...' trips the heuristic
+        # but is a real paper title with valid doi/authors/year, and would
+        # otherwise resurface in every single run forever. `noisy` still rides
+        # along so layers can adapt their matching.
+        if not doi or not title:
             out.append({"file": f.name, "meta": meta, "title": title,
                         "doi": doi, "noisy": noisy})
     if limit:
@@ -363,7 +368,11 @@ def main():
         matched = [x for x in r if x["status"] == "matched"]
         print(f"[layer 0] BibTeX: {len(matched)}/{len(remaining)} matched ({time.time()-t0:.0f}s)")
         ledger_rows.extend(r)
-        remaining = [c for c in remaining if c["file"] not in {x['source'] for x in matched}]
+        # Only drain papers whose matched record is DOI-complete; a match
+        # without a DOI still needs the registries (layer 2), so it stays in
+        # the flow.
+        complete = {x["source"] for x in matched if x.get("doi")}
+        remaining = [c for c in remaining if c["file"] not in complete]
     else:
         print("[layer 0] no BibTeX snapshot provided — skipping (pass --bib to use it)")
 
@@ -372,9 +381,14 @@ def main():
         t0 = time.time()
         r = layer_zotero(remaining, args.apply)
         matched = [x for x in r if x["status"] == "matched"]
-        print(f"[layer 1] Zotero: {len(matched)}/{len(remaining)} matched ({time.time()-t0:.0f}s)")
+        n_doi = len([x for x in matched if x.get("doi")])
+        print(f"[layer 1] Zotero: {len(matched)}/{len(remaining)} matched "
+              f"({n_doi} with DOI, {time.time()-t0:.0f}s)")
         ledger_rows.extend(r)
-        remaining = [c for c in remaining if c["file"] not in {x['source'] for x in matched}]
+        # Title-only matches (Zotero items often lack DOI) must NOT drain —
+        # layer 2 still needs to fill the DOI from Crossref/OpenAlex/PubMed.
+        complete = {x["source"] for x in matched if x.get("doi")}
+        remaining = [c for c in remaining if c["file"] not in complete]
     else:
         print("[layer 1] skipped (already fixed, or excluded)")
 

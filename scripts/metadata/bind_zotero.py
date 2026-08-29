@@ -148,7 +148,7 @@ def bind_paper(fp: Path, bib_entries, parent_meta: dict):
     if status == "multi_match":
         base.update(status="low_confidence", match_type=status)
         return base
-    if status in ("matched", "title_matched", "doi_bridge"):
+    if status in ("matched", "title_matched", "doi_bridge", "pmid_bridge"):
         base.update(status="matched", match_type=status)
         return base
     return {"doi": stored_doi, "key": "", "title": title, "authors": "",
