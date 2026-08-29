@@ -106,7 +106,6 @@ def main():
     matched_sources = set()
     batch_ids, batch_metas = [], []
     updated = skipped_scan = 0
-    skip_keys = set()
     offset, page = 0, 5000
 
     def flush():
@@ -135,13 +134,12 @@ def main():
             new = dict(m)
             new["article_type"] = tag["article_type"]
             new["topics"] = topics_json
-            # replace stale boolean topic keys
-            if not skip_keys:
-                for k in m:
-                    if k.startswith("topic_"):
-                        skip_keys.add(k)
-            for k in skip_keys:
-                new.pop(k, None)
+            # replace stale boolean topic keys: chroma update() MERGES metadata,
+            # absent keys are kept — a key is only deleted by setting it to
+            # None. So per chunk: None-out every existing topic_* key, then
+            # re-write the keys derived from the clean topics list.
+            for k in [k for k in new if k.startswith("topic_")]:
+                new[k] = None
             for kw in tps:
                 if kw:
                     new[f"topic_{kw}"] = 1
