@@ -128,6 +128,7 @@ def get_config() -> dict:
         "reference_graph_path": os.path.join(root, "data", "reference_graph.json"),  # snowballing
         "embed_url": "http://localhost:8081/v1/embeddings",
         "embed_url_raw": "http://localhost:8081/embedding",
+        "llm_url": "http://localhost:5015/v1",
         "collection_name": get_collection_name(),
     }
 
