@@ -28,6 +28,7 @@ Usage:
 import argparse
 import csv
 import json
+import os
 import subprocess
 import sys
 import time
@@ -111,53 +112,111 @@ def layer_bib(bib_path, candidates, dry_run):
 # ── layer 1: live Zotero ────────────────────────────────────────────────────
 
 def layer_zotero(candidates, dry_run):
+    """Match candidates against a FULL bulk pull of the local Zotero library.
+
+    Measured (2026-08, eph_rag host): the per-paper search endpoint costs
+    ~10.8s/call (server-side title search), so 623 candidates serialize to
+    ~112 min — while paginating /items (500/page) pulls the whole library
+    (8.5k items) in ~6s with DOI present on 97.5% of entries. A one-time
+    bulk pull + in-memory normalized-title matching replaces the per-paper
+    searches entirely. Falls back to per-paper zotero_search when the bulk
+    endpoint is unavailable.
+    """
     import zotero_access
     if not zotero_access.available():
         print("[layer 1] Zotero unreachable (no MCP, no HTTP) — skipping")
         return []
-    print("[layer 1] Zotero reachable — searching remaining papers")
+
+    # ── build in-memory library index: bulk pull via local HTTP ──
+    lib_index = []  # list of normalized item dicts
+    try:
+        from zotero_access import HTTP_BASE, _http_json, _normalize_item
+        start, pulled, t0 = 0, 0, time.time()
+        while True:
+            page = _http_json("/items", {"itemType": "-attachment", "limit": 500,
+                                         "format": "json", "start": start})
+            if not isinstance(page, list) or not page:
+                break
+            for it in page:
+                d = it.get("data") or {}
+                if d.get("itemType") in ("attachment", "note", "annotation"):
+                    continue
+                norm = _normalize_item(d, it.get("key") or "")
+                if norm.get("title"):
+                    lib_index.append(norm)
+            pulled += len(page)
+            start += 500
+            if len(page) < 500:
+                break
+        print(f"[layer 1] bulk-pulled {pulled} items ({len(lib_index)} with titles) "
+              f"in {time.time()-t0:.0f}s — matching in memory")
+    except Exception as ex:
+        print(f"[layer 1] bulk pull failed ({type(ex).__name__}) — falling back "
+              "to per-paper search (slow)")
+        lib_index = None
+
+    def _match_lib(title):
+        """In-memory title match against the bulk-pulled index."""
+        from bib_to_parent_store import normalize_paper_title
+        nt = normalize_paper_title(title)
+        if not nt:
+            return None
+        for it in lib_index or []:
+            bt = normalize_paper_title(it.get("title", ""))
+            if bt and (bt[:20] in nt or nt[:20] in bt):
+                return it
+        return None
+
     results = []
     for c in candidates:
         title = c["title"]
-        # noisy titles (journal headers) produce garbage zotero searches — skip them
         if c.get("noisy"):
             results.append({"source": c["file"], "layer": "zotero",
                             "title": title, "year": "", "doi": "",
                             "authors": "", "status": "unmatched",
                             "detail": "skipped: noisy title (journal header)"})
             continue
-        items = zotero_access.zotero_search(title, limit=1) if title else []
-        if not items:
+        it = None
+        if lib_index and title:
+            it = _match_lib(title)
+        elif title:
+            items = zotero_access.zotero_search(title, limit=1)
+            it = items[0] if items else None
+        if not it:
             results.append({"source": c["file"], "layer": "zotero",
                             "title": title, "year": "", "doi": "",
                             "authors": "", "status": "unmatched",
                             "detail": "no zotero hit"})
             continue
-        it = items[0]
-        # fetch full item for doi/authors if the search result is thin
-        if not it.get("doi") and it.get("key"):
-            full = zotero_access.zotero_item(it["key"]) or {}
-            it.update({k: v for k, v in full.items() if v and not it.get(k)})
         results.append({"source": c["file"], "layer": "zotero",
                         "title": it.get("title", title),
                         "year": it.get("year", ""),
                         "doi": it.get("doi", ""),
                         "authors": it.get("authors", ""),
                         "status": "matched" if it.get("doi") or it.get("title") else "unmatched",
-                        "detail": "zotero item"})
+                        "detail": "zotero bulk" if lib_index else "zotero item"})
     return results
 
 
 # ── layer 2: remote registries (via meta_audit clients) ────────────────────
 
 def layer_remote(candidates, dry_run):
+    """Remote registries (Crossref / OpenAlex / PubMed) with thread-pool fan-out.
+
+    Each candidate walks its own fallback chain (crossref-doi → crossref-title
+    → openalex-title → pubmed-title); the registry clients are stateless HTTP
+    wrappers (a throttle timestamp + counters), so candidates run in parallel
+    while each chain stays sequential. Measured serial cost ~4.3s/paper
+    (worst case, 3 registry fallbacks) → thread pool cuts wall time ~Nx.
+    """
+    from concurrent.futures import ThreadPoolExecutor
     from meta_audit import (CrossrefClient, PubmedClient, OpenAlexClient,
                             DEFAULT_CROSSREF_MAILTO)
     cr = CrossrefClient(mailto=DEFAULT_CROSSREF_MAILTO)
     pm = PubmedClient()
     oa = OpenAlexClient()
-    results = []
-    for c in candidates:
+
+    def resolve_one(c):
         title, doi = c["title"], c["doi"]
         # noisy titles (journal headers) pollute registry search — use a cleaned form
         clean_title = title
@@ -186,34 +245,47 @@ def layer_remote(candidates, dry_run):
                 rec = {"title": title, "doi": "", "year": "", "journal": "",
                        "authors": "", "pmid": pmids[0]}
         if rec:
-            results.append({"source": c["file"], "layer": f"remote:{via}",
-                            "title": rec.get("title", title),
-                            "year": str(rec.get("year", "")),
-                            "doi": rec.get("doi", doi),
-                            "authors": rec.get("authors", ""),
-                            "status": "matched", "detail": via})
-        else:
-            results.append({"source": c["file"], "layer": "remote",
-                            "title": title, "year": "", "doi": doi,
-                            "authors": "", "status": "unmatched",
-                            "detail": "no registry record"})
+            return {"source": c["file"], "layer": f"remote:{via}",
+                    "title": rec.get("title", title),
+                    "year": str(rec.get("year", "")),
+                    "doi": rec.get("doi", doi),
+                    "authors": rec.get("authors", ""),
+                    "status": "matched", "detail": via}
+        return {"source": c["file"], "layer": "remote",
+                "title": title, "year": "", "doi": doi,
+                "authors": "", "status": "unmatched",
+                "detail": "no registry record"}
+
+    # Crossref polite-pool throttle lives on the shared client; 4 workers keep
+    # total request rate well under the 50/s polite ceiling (bottleneck is
+    # per-request latency anyway).
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        results = list(ex.map(resolve_one, candidates))
     return results
 
 
 # ── layer 3: meta_audit proof-read round ────────────────────────────────────
 
 def layer_audit(dry_run, bib, limit):
-    """Run meta_audit.py as the final proof-reading round (its own confidence
-    gating + backups apply)."""
+    """Run meta_audit.py as the final proof-read round (its own confidence
+    gating + backups apply).
+
+    --limit is forwarded so a trial backfill doesn't trigger a full-library
+    audit; --resume lets an interrupted proof-read continue where it left off
+    (meta_audit maintains its own progress file). An apply-mode proof-read on
+    the full library is still a long job — it is opt-in via BACKFILL_AUDIT=full.
+    """
     cmd = [sys.executable, "-B", str(SCRIPTS_DIR / "metadata" / "meta_audit.py"),
-           "--bib", str(bib)]
-    if dry_run:
-        print("[layer 3] meta_audit has its own dry-run/apply semantics — run with "
-              "--apply at the end for the final proof-read round, or invoke it now:")
-        print("          " + " ".join(cmd))
-        return 0
-    print("[layer 3] running meta_audit.py proof-read round...")
-    return subprocess.call(cmd)
+           "--bib", str(bib), "--resume"]
+    if limit:
+        cmd += ["--limit", str(limit)]
+    if os.environ.get("BACKFILL_AUDIT", "").strip().lower() == "full":
+        print("[layer 3] BACKFILL_AUDIT=full — running meta_audit over the whole library (--apply)")
+        return subprocess.call(cmd + ["--apply"])
+    print("[layer 3] meta_audit proof-read round deferred (would audit the whole "
+          "library). Run explicitly when wanted:")
+    print("          " + " ".join(cmd + ["--apply"]))
+    return 0
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -241,18 +313,45 @@ def main():
         print("nothing to do")
         return
 
-    # previously-fixed papers (skip on re-run)
-    done = set()
+    # Per-layer failure ledger: skip a candidate only when EVERY layer this
+    # run will attempt has already failed for it (and on 'unresolved', which
+    # means no layer produced a record). Rows with status=matched must NOT
+    # block reprocessing — a dry-run records matched without writing
+    # parent_store, and papers_needing_fix() naturally re-includes anything
+    # still missing meta; blocking on matched would permanently drop those
+    # papers from every future --apply run.
+    failed_layers = {}   # source -> set of layers that failed (bib/zotero/remote)
+    unresolved = set()
     if ledger_path.exists():
         with open(ledger_path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
-                if row.get("status") == "matched":
-                    done.add(row["source"])
-    todo = [c for c in candidates if c["file"] not in done]
-    print(f"previously fixed (skipping): {len(done)} | to process: {len(todo)}")
-    if not todo:
-        print("all candidates already have a matched layer recorded")
-        return
+                src = row.get("source") or ""
+                status = row.get("status") or ""
+                if status == "unresolved":
+                    unresolved.add(src)
+                elif status == "unmatched":
+                    layer = (row.get("layer") or "").split(":")[0]
+                    if layer in ("bib", "zotero", "remote"):
+                        failed_layers.setdefault(src, set()).add(layer)
+
+    def _attempt_layers():
+        layers = set()
+        if "bib" not in skip and bib and Path(bib).exists():
+            layers.add("bib")
+        if "zotero" not in skip:
+            layers.add("zotero")
+        if "remote" not in skip:
+            layers.add("remote")
+        return layers
+
+    attempt = _attempt_layers()
+    todo = [c for c in candidates
+            if c["file"] not in unresolved
+            and not attempt.issubset(failed_layers.get(c["file"], set()))]
+    n_blocked = len([c for c in candidates if c["file"] in unresolved]) + \
+        len([c for c in candidates if c["file"] not in unresolved
+             and attempt.issubset(failed_layers.get(c["file"], set()))])
+    print(f"to process: {len(todo)} | fully-failed previously (skipping): {n_blocked}")
 
     ledger_rows = []
     remaining = list(todo)
@@ -316,36 +415,68 @@ def main():
         col = chromadb.PersistentClient(path=_CFG["chroma_path"]).get_collection(
             _CFG["collection_name"])
         by_source = {r["source"]: r for r in matched}
-        # chroma chunks
-        offset, page, n_upd = 0, 2000, 0
-        while True:
-            res = col.get(limit=page, offset=offset, include=["metadatas"])
-            ids = res["ids"]
-            if not ids:
-                break
-            new_metas = []
-            for m in res["metadatas"]:
-                src = m.get("source", "")
-                new = dict(m)
-                rec = by_source.get(src)
-                if rec:
-                    for fld in ("title", "year", "doi", "authors"):
-                        if rec.get(fld):
-                            new[fld] = rec[fld]
-                new_metas.append(new)
-            col.update(ids=ids, metadatas=new_metas)
-            n_upd += len(ids)
-            offset += page
-            if len(ids) < page:
-                break
-        print(f"[apply] chroma metadata updated on {n_upd} chunks")
-        # parent_store meta too
+
+        def chroma_source_variants(fn: str):
+            """parent-store filename -> possible chroma `source` values.
+
+            Ledger `source` keys are parent-store filenames ('X_md.json' or
+            'Author_Year_Title.json' stems included); chroma metadata `source`
+            values are '.md' names where the PMID-style '_md' suffix becomes
+            '.md' (measured: stem '10087273_md' -> chroma '10087273.md').
+            Name-style stems map to '<stem>.md' directly.
+            """
+            stem = fn[:-5] if fn.endswith(".json") else fn
+            out = {stem, stem + ".md"}
+            if stem.endswith("_md"):
+                out.add(stem[:-3] + ".md")
+            return sorted(out)
+
+        want = sorted({v for s in by_source for v in chroma_source_variants(s)})
+        # ── chroma chunks: filtered read (no full scan) ──
+        found = {}
+        page = 100
+        for i in range(0, len(want), page):
+            chunk_keys = want[i:i + page]
+            res = col.get(where={"source": {"$in": chunk_keys}},
+                          include=["metadatas"], limit=10000)
+            for cid, m in zip(res["ids"] or [], res["metadatas"] or []):
+                found[cid] = dict(m)
+        print(f"[apply] chroma: located {len(found)} chunks for {len(want)} source variants")
+        n_upd = 0
+        BATCH = 500
+        ids_batch, meta_batch = [], []
+        for cid, m in found.items():
+            src = m.get("source", "")
+            rec = by_source.get(src)
+            if rec is None:
+                # resolved via a variant — map back through the ledger by stem
+                stem = src[:-3] if src.endswith(".md") else src
+                for alt in chroma_source_variants(stem):
+                    if alt in by_source:
+                        rec = by_source[alt]
+                        break
+            if rec is None:
+                continue
+            new = dict(m)
+            for fld in ("title", "year", "doi", "authors"):
+                if rec.get(fld):
+                    new[fld] = rec[fld]
+            if new != m:  # only update chunks whose metadata actually changes
+                ids_batch.append(cid)
+                meta_batch.append(new)
+                n_upd += 1
+                if len(ids_batch) >= BATCH:
+                    col.update(ids=ids_batch, metadatas=meta_batch)
+                    ids_batch, meta_batch = [], []
+        if ids_batch:
+            col.update(ids=ids_batch, metadatas=meta_batch)
+        print(f"[apply] chroma metadata updated on {n_upd} chunks (filtered locate + changed-only write)")
+        # parent_store meta too — only touch files that actually matched
         pm_dir = Path(_CFG["parent_store_dir"])
-        for f in pm_dir.glob("*.json"):
-            stem = f.stem
-            src = stem + ".md" if not stem.endswith(".md") else stem
-            rec = by_source.get(src) or by_source.get(stem)
-            if not rec:
+        n_pm = 0
+        for fname, rec in by_source.items():
+            f = pm_dir / fname
+            if not f.exists():
                 continue
             data = json.loads(f.read_text(encoding="utf-8"))
             changed = False
@@ -359,7 +490,8 @@ def main():
                         changed = True
             if changed:
                 atomic_json_dump(data, f)
-        print("[apply] parent_store meta updated")
+                n_pm += 1
+        print(f"[apply] parent_store meta updated on {n_pm} files")
         # layer 3
         if bib:
             layer_audit(dry_run=False, bib=bib, limit=args.limit)
