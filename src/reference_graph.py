@@ -171,16 +171,97 @@ def build_reference_graph(out_path: Optional[str] = None,
 # ---------------------------------------------------------------------------
 
 def load_graph() -> Optional[Dict]:
+    """Load the citation graph, cached by file mtime (called per query —
+    re-reading a multi-MB JSON on every search is waste; the graph only
+    changes when build_reference_graph runs)."""
     cfg = get_config()
     path = cfg.get("reference_graph_path") or os.path.join(
         cfg["data_dir"], "reference_graph.json")
     if not os.path.exists(path):
         return None
     try:
+        mtime = os.path.getmtime(path)
+        cache = getattr(load_graph, "_cache", None)
+        if cache and cache[0] == path and cache[1] == mtime:
+            return cache[2]
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            graph = json.load(f)
+        load_graph._cache = (path, mtime, graph)  # type: ignore[attr-defined]
+        return graph
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def neighbors(graph: Dict, source_or_title: str, limit: int = 30) -> Dict[str, Dict]:
+    """1-hop citation neighborhood of a paper, resolved to LIBRARY sources.
+
+    Both directions:
+      forward  ("cited-by") — library papers whose in-text citations match
+                 `src`'s first-author surname + year (snowball forward
+                 logic, reused);
+      backward ("cites")     — library papers resolving the (author, year)
+                 targets of `src`'s own citations. v1 graphs carry no
+                 title hints (in-text extraction), so resolution is the
+                 author-year heuristic: edge surname prefix (≥4 chars)
+                 matches a candidate's first-author surname AND years
+                 are equal.
+
+    Returns {resolved_source: {"via": …, "direction": "cites"|"cited-by"}}
+    — empty when the source isn't in the graph. Never raises.
+    """
+    try:
+        src = _resolve_source(graph, source_or_title)
+        if src is None:
+            return {}
+        papers = graph["papers"]
+
+        def _surname_year(meta: Dict) -> Tuple[Set[str], str]:
+            surnames: Set[str] = set()
+            for a in (meta.get("authors", "") or "").split(";"):
+                a = a.strip()
+                if a:
+                    surnames.add(a.split()[0].split(",")[0].lower())
+            return surnames, str(meta.get("year", "") or "")
+
+        out: Dict[str, Dict] = {}
+
+        # forward: who cites src (snowball's matcher does the work)
+        fwd = snowball(graph, src, "forward", limit=limit)
+        for m in fwd.get("matches", []):
+            s = m.get("source")
+            if s and s != src:
+                out.setdefault(s, {"via": m.get("via", ""),
+                                   "direction": "cited-by"})
+
+        # backward: whom src cites — resolve (author, year) edges against
+        # library first-author surnames + years.
+        year_index: Dict[str, List[str]] = {}
+        for s, m in papers.items():
+            _, y = _surname_year(m)
+            if y:
+                year_index.setdefault(y, []).append(s)
+        for e in graph["edges"]:
+            if e.get("from") != src:
+                continue
+            ta = (e.get("to_author") or "").lower()
+            ta_base = re.split(r"\s+et\s+al\.?$|\s*&\s*|\s+and\s+", ta)[0]
+            ta_base = ta_base.strip().rstrip(",")
+            ty = e.get("to_year") or ""
+            if len(ta_base) < 3 or not ty:
+                continue
+            for cand in year_index.get(ty, []):
+                if cand == src or cand in out:
+                    continue
+                csurn, _ = _surname_year(papers.get(cand, {}))
+                if any(cs.startswith(ta_base[:4]) for cs in csurn if cs):
+                    out[cand] = {"via": e.get("to_raw", ""),
+                                 "direction": "cites"}
+                    if len(out) >= limit * 2:
+                        return out
+        return out
+    except Exception:
+        # citation boost is an enhancement, never a dependency
+        return {}
 
 
 def _resolve_source(graph: Dict, source_or_title: str) -> Optional[str]:

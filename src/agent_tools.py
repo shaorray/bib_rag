@@ -252,6 +252,43 @@ class ToolFactory:
                 except Exception:
                     pass
 
+            # Citation-graph proximity boost (env RAG_CITE_BOOST, default
+            # on). Anchors = top-2 sources of the reranked pool; any pool
+            # entry that is a 1-hop citation neighbor of an anchor gets
+            # multiplied by 1.05 (cited-by) or 1.03 (cites) — a small nudge
+            # that reorders pool-internal rank ties without teleporting
+            # irrelevant papers in. Reranker scores are logits; ±0.2 is a
+            # large move there, so the factors are deliberately gentle.
+            if os.environ.get("RAG_CITE_BOOST", "1") != "0":
+                try:
+                    try:
+                        from .reference_graph import load_graph, neighbors
+                    except ImportError:
+                        from reference_graph import load_graph, neighbors
+                    g = load_graph()
+                    if g:
+                        anchors = [e.get("source", "") for e in fused[:2]]
+                        nbr: Dict[str, str] = {}
+                        for a in anchors:
+                            for s, info in neighbors(g, a).items():
+                                d = (info or {}).get("direction", "")
+                                if s not in nbr or d == "cited-by":
+                                    nbr[s] = d
+                        nbr.pop(anchors[0], None) if anchors else None
+                        if len(anchors) > 1:
+                            nbr.pop(anchors[1], None)
+                        if nbr:
+                            for e in fused:
+                                d = nbr.get(e.get("source", ""))
+                                if d:
+                                    e["rerank_score"] = (
+                                        e.get("rerank_score") or 0.0) * (
+                                        1.05 if d == "cited-by" else 1.03)
+                            fused.sort(
+                                key=lambda x: -(x.get("rerank_score") or 0.0))
+                except Exception:
+                    pass
+
             # Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk
             # the RERANKED pool (fusion pool depth, ≥ limit) and keep at
             # most CAP entries per source, taking the best chunks until the
