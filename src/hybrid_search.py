@@ -63,7 +63,11 @@ _CJK_RE = re.compile(r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+')
 
 # Schema version: v2 adds the cjk_text column. A v1 index keeps working for
 # latin queries; the first WRITE (upsert/rebuild) migrates it in place.
-_SCHEMA_VERSION = 2
+# v3 adds the meta_text column (title/authors/journal/year) — the metadata
+# channel. Entity-flavored queries ("Koolpe 2002 ephrin mimetic", "the 2018
+# Nature maternal-fetal paper") match NOTHING in body text; this channel
+# catches them lexically. A v1/v2 index keeps working; first WRITE migrates.
+_SCHEMA_VERSION = 3
 
 
 def _cjk_prepare(text: str) -> str:
@@ -76,6 +80,104 @@ def _cjk_prepare(text: str) -> str:
         else:
             out.extend(run[i:i + 2] for i in range(len(run) - 1))
     return " ".join(out)
+
+
+# -- meta_text construction (metadata channel) --------------------------------
+#
+# meta_text is a compact lexical fingerprint of a paper's metadata, indexed
+# in EVERY row of that source (see _SCHEMA_VERSION=3). It exists so FTS can
+# match entity-flavored queries ("Koolpe 2002", "the 2018 Nature
+# maternal-fetal paper") that never appear in body text.
+
+# How many authors to index. First author carries most entity queries
+# ("Koolpe 2002"); beyond ~5 the string bloats every row with rare surnames
+# that can false-match OTHER papers' queries.
+_META_N_AUTHORS = 5
+
+# Authors field separators: Zotero-style "Paulson,Alicia F.; Fang,Xiang" →
+# tokens. Splitting on ; gives one entry per author.
+_AUTHOR_SPLIT = re.compile(r"[;,]")
+
+
+def _author_tokens(authors: str) -> str:
+    """'Paulson,Alicia F.; Fang,Xiang; ...' → 'paulson alicia fang xiang' ...
+
+    Keeps only the first _META_N_AUTHORS authors. Surnames and given names
+    are all indexed (unicode61 lowercases): queries hit on either form
+    ("Koolpe" surname / "Michael" given name both match).
+    """
+    entries = [a.strip() for a in _AUTHOR_SPLIT.split(authors or "")
+               if a.strip()][:_META_N_AUTHORS]
+    tokens = []
+    for e in entries:
+        # "Paulson,Alicia F." — after the ; split the comma inside the entry
+        # is surname/given separator; both halves are worth indexing.
+        tokens.extend(t for t in re.split(r"[,\s]+", e) if t)
+    return " ".join(tokens)
+
+
+def _join_meta_text(meta: Dict[str, str]) -> str:
+    """title + author tokens + journal + year → one indexed string.
+
+    Order is irrelevant to BM25; what matters is compactness (the string is
+    duplicated into every chunk row of the source) and tokenization that
+    unicode61 can split (no glued compound like 'Koolpe;Michael').
+    """
+    parts: List[str] = []
+    if meta.get("title"):
+        parts.append(meta["title"])
+    if meta.get("authors"):
+        tok = _author_tokens(meta["authors"])
+        if tok:
+            parts.append(tok)
+    if meta.get("journal"):
+        parts.append(meta["journal"])
+    if meta.get("year"):
+        parts.append(str(meta["year"]))
+    return " ".join(parts)[:2000]
+
+
+_FM_FIELD = {
+    "title": re.compile(r"^Title:\s*(.+)$", re.M),
+    "authors": re.compile(r"^Authors?:\s*(.+)$", re.M),
+    "year": re.compile(r"^Year:\s*(\d{4})", re.M),
+    "journal": re.compile(r"^Journal:\s*(.+)$", re.M),
+}
+
+
+def _meta_from_frontmatter(text: str) -> Dict[str, str]:
+    """Scrape Title:/Authors:/Year:/Journal: labels from a parent's content
+    head (fallback when the JSON meta dict lacks fields). The chunking
+    pipeline's front-matter block (if present) sits at the top of parent 0."""
+    out: Dict[str, str] = {}
+    for k, pat in _FM_FIELD.items():
+        m = pat.search(text or "")
+        if m:
+            out[k] = m.group(1).strip()
+    return out
+
+
+# Lastname_Year_Journal_Title filename pattern (e.g.
+# "Koolpe_2002_The Journal of Biological Chemistry_1589 - 1619").
+_FNAME_YEAR = re.compile(r"^(?:[\w\-.]+?)[_\s]+((?:19|20)\d{2})[_\s]+(.*)$")
+
+
+def _meta_from_filename(source: str) -> Dict[str, str]:
+    """Last-ditch fallback: derive a year (and title tail) from the source
+    filename. Returns only what it can infer — never fabricates fields."""
+    out: Dict[str, str] = {}
+    m = _FNAME_YEAR.match(source or "")
+    if m:
+        out["year"] = m.group(1)
+        rest = m.group(2).strip()
+        # "Journal_Name_Tail" → journal is the segment before the last one
+        segs = [s.strip() for s in rest.split("_") if s.strip()]
+        if len(segs) >= 2:
+            out["journal"] = segs[0]
+            out["title"] = " ".join(segs[1:])
+        elif segs:
+            out["title"] = segs[0]
+    return out
 
 
 def _split_latin_cjk(query: str) -> Tuple[str, List[str]]:
@@ -135,14 +237,16 @@ class HybridIndex:
         return self._conn
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
-        """Create (or migrate v1→v2) the FTS schema.
+        """Create (or migrate v1→v2→v3) the FTS schema.
 
         FTS5 tables can't ALTER: migration = rename old table → rebuild with
-        the new schema → copy rows (recomputing cjk_text on the fly)."""
+        the new schema → copy rows (recomputing derived columns on the fly).
+        """
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS child_fts USING fts5(
                 text,
                 cjk_text,
+                meta_text,
                 parent_id UNINDEXED,
                 source UNINDEXED,
                 section UNINDEXED,
@@ -154,15 +258,24 @@ class HybridIndex:
             CREATE TABLE IF NOT EXISTS fts_meta (
                 source TEXT PRIMARY KEY,
                 n_children INTEGER,
-                built_at TEXT DEFAULT (datetime('now'))
+                built_at TEXT DEFAULT (datetime('now')),
+                rep_parent_id TEXT,
+                rep_section TEXT,
+                rep_text TEXT
             )
         """)
-        # Detect v1 (no cjk_text column) and migrate in place.
+        # fts_meta is a regular table (not FTS5), so missing v3 columns can be
+        # added in place — no table rebuild needed.
+        _meta_cols = [r[1] for r in conn.execute("PRAGMA table_info(fts_meta)")]
+        for _col in ("rep_parent_id", "rep_section", "rep_text"):
+            if _col not in _meta_cols:
+                conn.execute(f"ALTER TABLE fts_meta ADD COLUMN {_col} TEXT")
+        # Detect old schema (missing cjk_text/meta_text) and migrate in place.
         try:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(child_fts)")]
         except sqlite3.Error:
             cols = []
-        if cols and "cjk_text" not in cols:
+        if cols and ("cjk_text" not in cols or "meta_text" not in cols):
             conn.executescript("""
                 DROP TABLE IF EXISTS child_fts_v1_migrate;
                 ALTER TABLE child_fts RENAME TO child_fts_v1_migrate;
@@ -171,6 +284,7 @@ class HybridIndex:
                 CREATE VIRTUAL TABLE child_fts USING fts5(
                     text,
                     cjk_text,
+                    meta_text,
                     parent_id UNINDEXED,
                     source UNINDEXED,
                     section UNINDEXED,
@@ -178,14 +292,31 @@ class HybridIndex:
                     tokenize = 'unicode61 remove_diacritics 2'
                 )
             """)
-            rows = conn.execute(
-                "SELECT text, parent_id, source, section, chunk_idx "
-                "FROM child_fts_v1_migrate").fetchall()
-            conn.executemany(
-                "INSERT INTO child_fts(text, cjk_text, parent_id, source, section, chunk_idx) "
-                "VALUES (?,?,?,?,?,?)",
-                [(t, _cjk_prepare(t), p, s, sec, idx)
-                 for (t, p, s, sec, idx) in rows])
+            has_cjk = "cjk_text" in cols
+            has_meta = "meta_text" in cols
+            if has_cjk and has_meta:
+                rows = conn.execute(
+                    "SELECT text, cjk_text, meta_text, parent_id, source, "
+                    "section, chunk_idx FROM child_fts_v1_migrate").fetchall()
+                conn.executemany(
+                    "INSERT INTO child_fts(text, cjk_text, meta_text, "
+                    "parent_id, source, section, chunk_idx) "
+                    "VALUES (?,?,?,?,?,?,?)", rows)
+            else:
+                # v1/v2 -> v3: recompute every derived column from text.
+                # meta_text can't be recomputed here (it needs parent_store
+                # metadata) — filled by the next upsert/rebuild of each
+                # source; until then it's empty and the meta channel simply
+                # misses for that source.
+                rows = conn.execute(
+                    "SELECT text, parent_id, source, section, chunk_idx "
+                    "FROM child_fts_v1_migrate").fetchall()
+                conn.executemany(
+                    "INSERT INTO child_fts(text, cjk_text, meta_text, "
+                    "parent_id, source, section, chunk_idx) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    [(t, _cjk_prepare(t), "", p, s, sec, idx)
+                     for (t, p, s, sec, idx) in rows])
             conn.execute("DROP TABLE child_fts_v1_migrate")
             conn.commit()
 
@@ -236,21 +367,141 @@ class HybridIndex:
         """(Re)index one paper's children. Returns child count."""
         if children is None:
             children = self._children_for_source(source)
+        meta_text = self._meta_text_for_source(source, children)
         c = self.conn
         c.execute("DELETE FROM child_fts WHERE source = ?", (source,))
         c.execute("DELETE FROM fts_meta WHERE source = ?", (source,))
         rows = [
-            (ch["text"], _cjk_prepare(ch["text"]), ch["parent_id"], ch["source"],
-             ch["section"], ch.get("idx", i))
+            # NOTE: rows are keyed by the `source` ARGUMENT (parent_store
+            # stem = chroma's source domain), NOT ch["source"] — parent
+            # JSONs can carry an older source spelling ("12351647.md") that
+            # mismatches the stem ("12351647_md"), silently breaking the
+            # fts_meta JOIN and where_source filters (found 2026-08-31:
+            # 3002/3002 sources orphaned this way).
+            (ch["text"], _cjk_prepare(ch["text"]), meta_text, ch["parent_id"],
+             source, ch["section"], ch.get("idx", i))
             for i, ch in enumerate(children)
         ]
         c.executemany(
-            "INSERT INTO child_fts(text, cjk_text, parent_id, source, section, chunk_idx) "
-            "VALUES (?,?,?,?,?,?)", rows)
-        c.execute("INSERT INTO fts_meta(source, n_children) VALUES (?,?)",
-                  (source, len(rows)))
+            "INSERT INTO child_fts(text, cjk_text, meta_text, parent_id, source, section, chunk_idx) "
+            "VALUES (?,?,?,?,?,?,?)", rows)
+        rep = children[0] if children else {}
+        rep_text = (rep.get("text") or "")[:2000]
+        if meta_text and rep_text:
+            # Entity-enriched carrier: the cross-encoder reranker scores
+            # query vs this string. A bare body-text chunk loses entity
+            # queries ("Koolpe Pasquale 2002" appears in NO chunk text);
+            # prepending the meta fingerprint lets the reranker see
+            # title/authors/journal/year. rep_text is never displayed —
+            # the agent fetches the real parent by parent_id — so this
+            # enrichment only affects rerank scoring.
+            rep_text = f"{meta_text}. {rep_text}"[:2500]
+        c.execute(
+            "INSERT INTO fts_meta(source, n_children, rep_parent_id, rep_section, rep_text) "
+            "VALUES (?,?,?,?,?)",
+            (source, len(rows), rep.get("parent_id", ""), rep.get("section", ""),
+             rep_text))
         c.commit()
         return len(rows)
+
+    # -- metadata channel -----------------------------------------------------
+
+    @staticmethod
+    def _meta_text_for_source(source: str, children: Optional[List[dict]] = None) -> str:
+        """Build the metadata string indexed in the meta_text column.
+
+        Source of truth: the parent_store JSON's first-parent `meta` dict
+        (title/authors/year/journal), written by the metadata pipeline
+        (bind_zotero / backfill_all / repair_meta). The string is compact
+        and tokenized (surnames split out) so FTS unicode61 can lexically
+        match entity-flavored queries like "Koolpe 2002 ephrin mimetic
+        peptide" or "the 2018 Nature maternal-fetal paper" that body text
+        never contains.
+
+        Fallbacks (rare — a 2026-08-31 audit found 0/3002 eph sources with
+        an empty meta dict, but the index must survive ANY store state):
+        front-matter scrape from the first child's content, then the
+        Lastname_Year_Journal filename pattern.
+        """
+        meta: Dict[str, str] = {}
+        # Path 1: parent_store JSON meta dict (authoritative).
+        try:
+            cfg = get_config()
+            path = os.path.join(cfg["parent_store_dir"], f"{source}.json")
+            if not os.path.exists(path):
+                safe = re.sub(r"[^\w\-]", "_", source)[:100]
+                path = os.path.join(cfg["parent_store_dir"], f"{safe}.json")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    parents = json.load(f)
+                if parents:
+                    m = parents[0].get("meta") or {}
+                    for k in ("title", "authors", "year", "journal"):
+                        v = (m.get(k) or "").strip()
+                        if v and k not in meta:
+                            meta[k] = v
+        except (OSError, json.JSONDecodeError):
+            pass
+        # Path 2: front-matter scrape from children content (fallback when
+        # the meta dict is missing fields, e.g. legacy pre-pipeline papers).
+        if len(meta) < 4 and children:
+            fm = _meta_from_frontmatter(children[0]["text"][:2000])
+            for k in ("title", "authors", "year", "journal"):
+                if k not in meta and fm.get(k):
+                    meta[k] = fm[k]
+        # Path 3: the source filename itself (Lastname_Year_Journal_Title
+        # pattern) — the last-ditch lexical hint when both above are empty.
+        if "title" not in meta and "authors" not in meta:
+            fm = _meta_from_filename(source)
+            for k in ("title", "authors", "year", "journal"):
+                if k not in meta and fm.get(k):
+                    meta[k] = fm[k]
+        return _join_meta_text(meta)
+
+    def _meta_hits(self, match_q: str, limit: int,
+                   where_source: Optional[str] = None) -> List[dict]:
+        """Run a MATCH against meta_text and return REPRESENTATIVE chunks
+        (one per source) instead of raw rows — a meta hit has no specific
+        chunk semantics; the source's first child is the carrier.
+
+        A meta_text MATCH hits EVERY row of the source (they all carry the
+        same meta_text), so raw rows would flood the results with ONE
+        source. GROUP BY source collapses to one hit per source; the
+        carrier chunk (parent 0 = title/front-matter region) is read from
+        the fts_meta side table — O(1) per hit, no parent_store re-chunk.
+        """
+        c = self.conn
+        sql = ("SELECT f.source, m.rep_parent_id, m.rep_section, m.rep_text "
+               "FROM child_fts f JOIN fts_meta m ON f.source = m.source "
+               "WHERE meta_text MATCH ?")
+        params: list = [match_q]
+        if where_source:
+            sql += " AND f.source = ?"
+            params.append(where_source)
+        # MIN(bm25(...)) is illegal (FTS5 aux functions can't nest inside
+        # aggregates); MIN(rank) does the same job — `rank` IS the bm25
+        # ordering (fts5 rank = -bm25 by default; more negative = better).
+        sql += " GROUP BY f.source ORDER BY MIN(rank) LIMIT ?"
+        # All rows of one source share one meta_text, so their bm25 ties —
+        # MIN(bm25) is the GROUP BY tiebreak, not a per-chunk ranking.
+        params.append(int(limit))
+        rows = c.execute(sql, params).fetchall()
+        out: List[dict] = []
+        for src, pid, sec, text in rows:
+            if not text:
+                # Pre-rep-column index (v2 fts_meta): fall back to the source's
+                # first FTS row as carrier so the hit isn't lost.
+                raw = c.execute(
+                    "SELECT parent_id, section, text FROM child_fts "
+                    "WHERE source = ? ORDER BY chunk_idx LIMIT 1", (src,)).fetchone()
+                if raw:
+                    pid, sec, text = raw[0], raw[1], raw[2]
+                else:
+                    continue
+            out.append({"parent_id": pid or src, "source": src,
+                        "section": sec or "", "text": text or "",
+                        "bm25": 0.0, "meta_hit": True})
+        return out
 
     def rebuild(self, progress: bool = False) -> int:
         """Full rebuild from parent_store. Returns total children indexed."""
@@ -291,6 +542,13 @@ class HybridIndex:
         CJK handling: the query is split into latin terms (matched against
         `text`) and CJK runs (matched as character bigrams against
         `cjk_text`); both sub-queries run and results are inter-leaved.
+
+        Metadata channel (v3): the same latin terms are additionally
+        matched against the `meta_text` column (title/authors/journal/year
+        fingerprint). Meta hits return one REPRESENTATIVE chunk per source
+        (see _meta_hits); they join the result list after the body-text
+        hits, marked `meta_hit=True`, and are fused by RRF downstream like
+        any other channel entry.
         """
         q = _fts_escape(query)
         latin_q, cjk_runs = _split_latin_cjk(query)
@@ -352,7 +610,7 @@ class HybridIndex:
                         p.strip('"') for p in run_q.split()))
                 _extend(res)
         except sqlite3.OperationalError:
-            # match-syntax issue on one channel shouldn't kill the other —
+            # match-syntax issue on channel shouldn't kill the other —
             # but a partial failure here means results may be partially
             # populated; returning them is still better than nothing.
             pass
@@ -361,13 +619,24 @@ class HybridIndex:
     # -- RRF fusion ----------------------------------------------------------
 
     def rrf_fuse(self, vector_results: List[dict], bm25_results: List[dict],
-                 top_k: int = 6) -> List[dict]:
-        """Reciprocal Rank Fusion of the two ranked lists.
+                 top_k: int = 6,
+                 meta_results: Optional[List[dict]] = None) -> List[dict]:
+        """Reciprocal Rank Fusion of the ranked lists.
 
         vector_results / bm25_results entries need: parent_id, source,
         section, text (+ similarity / bm25 for display).
         RRF score = Σ 1/(k + rank) over lists where the chunk appears
         (k=60).
+
+        Metadata channel (third list, optional): entries are the
+        SOURCE-LEVEL representative chunks from _meta_hits, carrying an
+        entity-enriched carrier text (meta fingerprint prepended). When
+        the same parent_id already fused from vec/bm25, the meta_hit
+        entry REPLACES the carrier — body chunks never contain author/year
+        ("Koolpe Pasquale 2002" appears in no body text), so the enriched
+        carrier is the reranker's only view of the entity signal. The
+        parent_id stays the same, so the RRF score still accumulates
+        across channels as usual.
 
         RRF semantics per channel (env RRF_DEDUP, ablated on the gold set):
           - "bm25" (default): the dense channel KEEPS chunk-level ranks —
@@ -400,13 +669,23 @@ class HybridIndex:
                 out.append(r)
             return out
 
+        channels = [("vec", vector_results, mode == "full"),
+                     ("bm25", bm25_results, mode != "off")]
+        if meta_results:
+            # Meta hits are one-per-source by construction — dedup is a
+            # no-op semantically, but passing dedup=False keeps them
+            # rank-weighted as their own channel.
+            channels.append(("meta", meta_results, False))
+
         fused: dict = {}
-        for channel, results, dedup in (
-                ("vec", vector_results, mode == "full"),
-                ("bm25", bm25_results, mode != "off")):
+        for channel, results, dedup in channels:
             for rank, r in enumerate(_channel_dedup(results, dedup), 1):
                 k = r.get("parent_id", "")
                 d = fused.setdefault(k, {"entry": r, "rrf": 0.0, "hits": []})
+                if r.get("meta_hit") and not d["entry"].get("meta_hit"):
+                    # meta carrier wins the slot: it's the entity-enriched
+                    # view the reranker needs (see docstring).
+                    d["entry"] = r
                 d["rrf"] += 1.0 / (RRF_K + rank)
                 d["hits"].append(channel)
         ranked = sorted(fused.values(), key=lambda d: -d["rrf"])[:top_k]
@@ -420,21 +699,40 @@ class HybridIndex:
 
     def search(self, query: str, vector_results: List[dict], top_k: int = 6,
                where_source: Optional[str] = None) -> List[dict]:
-        """One-call hybrid: caller supplies dense results, we add BM25 + fuse.
-        If FTS index is empty, returns vector_results unchanged (graceful
-        degradation — the agent never breaks because BM25 is missing).
+        """One-call hybrid: caller supplies dense results, we add BM25 + meta
+        + fuse. If FTS index is empty, returns vector_results unchanged
+        (graceful degradation — the agent never breaks because BM25 is
+        missing).
 
-        Pool symmetry: BOTH channels contribute top_k*3 candidates so RRF
-        ranks are earned, not biased by an asymmetric pool depth (a 6-deep
-        dense list vs an 18-deep bm25 list hands the fusion to bm25's tail).
-        Callers already pass limit-sized dense lists, so the widening to
-        top_k*3 happens in the RETRIEVAL wrapper, not here — anything past
-        top_k*3 entries is dropped to keep both channels equal-footed."""
+        Pool symmetry: BOTH body channels contribute top_k*3 candidates so
+        RRF ranks are earned, not biased by an asymmetric pool depth (a
+        6-deep dense list vs an 18-deep bm25 list hands the fusion to
+        bm25's tail). Callers already pass limit-sized dense lists, so the
+        widening to top_k*3 happens in the RETRIEVAL wrapper, not here —
+        anything past top_k*3 entries is dropped to keep both channels
+        equal-footed.
+
+        Metadata channel: the latin query terms are ALSO matched against
+        meta_text (title/authors/journal/year). Hits are source-level
+        representative chunks; they join RRF as a THIRD channel, so an
+        entity query ("Koolpe Pasquale 2002 …") that both body channels
+        miss can still surface the right paper.
+        """
         if self.indexed_sources() == 0:
             return vector_results[:top_k]
         bm = self.bm25_search(query, limit=top_k * 3, where_source=where_source)
         vec = vector_results[:top_k * 3]
-        return self.rrf_fuse(vec, bm, top_k=top_k)
+        meta: Optional[List[dict]] = None
+        try:
+            latin_q, _runs = _split_latin_cjk(query)
+            if latin_q:
+                meta = self._meta_hits(latin_q, limit=top_k,
+                                       where_source=where_source)
+                if not meta:
+                    meta = None
+        except sqlite3.Error:
+            meta = None
+        return self.rrf_fuse(vec, bm, top_k=top_k, meta_results=meta)
 
 
 def is_available() -> bool:
