@@ -203,6 +203,12 @@ class ToolFactory:
             # Clamp the result count so a single search can't flood the context.
             limit = max(1, min(int(limit or 5), SEARCH_MAX_LIMIT))
 
+            # Goldset ablation 2026-08-31: fetching limit*3 dense candidates
+            # and letting the extra siblings into fusion DILUTED the
+            # chunk-frequency signal (recall 0.742→0.725) — dense keeps the
+            # tight limit; bm25 contributes its own limit*3 pool inside
+            # HybridIndex.search, so the two channels stay complementary
+            # (tight dense head + wider lexical recall) rather than symmetric.
             results = self._vector_search(query, limit, where)
             if results is None:
                 return "EMBEDDING_ERROR: Could not generate query embedding"

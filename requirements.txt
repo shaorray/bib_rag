@@ -23,9 +23,8 @@ openai>=1.40             # OpenAI-compatible client (classify_papers, agent node
 pydantic>=2,<3
 
 # ── Document processing ─────────────────────────────────────────────────
-pymupdf>=1.24            # PDF text extraction (add_papers, convert_pdfs)
-pymupdf4llm>=0.0.17      # PDF → structured markdown
-odfpy>=1.4               # .odt writer outputs (bib_rag_writer/grill/debate)
+pymupdf4llm>=0.0.17      # PDF → structured markdown (add_papers, convert_pdfs)
+
 
 # ── Optional (CPU-only fallback build path) ─────────────────────────────
 # Only needed for src/build_hierarchical.py (SentenceTransformers CPU embed).

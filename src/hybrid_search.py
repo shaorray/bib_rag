@@ -322,17 +322,35 @@ class HybridIndex:
 
         results: List[dict] = []
         try:
+            # Cross-sub-run double-count fix (the ONLY dedup BM25 needs):
+            # the latin and CJK sub-queries can return the SAME chunk twice
+            # (one hit per sub-run). That is one piece of evidence counted
+            # twice — drop the repeat, keep the first occurrence. NOTE: the
+            # same PARENT appearing with DIFFERENT children is NOT a
+            # double-count — chunk frequency is a relevance signal (a paper
+            # with 4 matching sections is probably the right paper; goldset
+            # ablation 2026-08-31: collapsing it cost recall 0.742→0.700 and
+            # MRR 0.638→0.528), so parent-level dedup deliberately does NOT
+            # happen here (see rrf_fuse RRF_DEDUP=off default).
+            seen_chunks: set = set()
+            def _extend(res: List[dict]):
+                for r in res:
+                    key = (r.get("parent_id"), r.get("text", "")[:120])
+                    if key in seen_chunks:
+                        continue
+                    seen_chunks.add(key)
+                    results.append(r)
             if latin_q:
                 res = _run(latin_q)
                 if not res and " " in latin_q:
                     res = _run(" OR ".join(latin_q.split()))
-                results.extend(res)
+                _extend(res)
             for run_q in cjk_match_parts:
                 res = _run(run_q)
                 if not res and " " in run_q:
                     res = _run(" OR ".join(
                         p.strip('"') for p in run_q.split()))
-                results.extend(res)
+                _extend(res)
         except sqlite3.OperationalError:
             # match-syntax issue on one channel shouldn't kill the other —
             # but a partial failure here means results may be partially
@@ -351,27 +369,46 @@ class HybridIndex:
         RRF score = Σ 1/(k + rank) over lists where the chunk appears
         (k=60).
 
-        Dedup key: parent_id ONLY. chroma's historical chunk texts and the
-        FTS index (rebuilt from parent_store with the current chunking
-        logic) drift within the same parent (generational drift), so any
-        text-based key silently loses dual-channel signal. Parent-level
-        dedup is the correct evidence-unit anyway: two children of the
-        same parent are two views of one document.
+        RRF semantics per channel (env RRF_DEDUP, ablated on the gold set):
+          - "bm25" (default): the dense channel KEEPS chunk-level ranks —
+            several children of one parent in the dense top-N is a
+            relevance-frequency signal (a paper with 4 matching sections is
+            probably the right source), NOT a bug. Only the bm25 channel is
+            collapsed to parent level, because its latin+CJK sub-runs can
+            return the SAME chunk twice — a true double-count of one piece
+            of evidence.
+          - "full": both channels parent-deduped (strict RRF item semantics).
+          - "off": pre-2026-08-31 behavior (no dedup at all).
+        The fused key is parent_id regardless: chroma's historical chunk
+        texts and the FTS index drift within the same parent (generational
+        drift), so any text-based key silently loses dual-channel signal.
+        Parent-level is the correct evidence-unit anyway: two children of
+        the same parent are two views of one document.
         """
-        def _key(r):
-            return r.get("parent_id", "")
+        mode = os.environ.get("RRF_DEDUP", "off")
+
+        def _channel_dedup(results, dedup: bool):
+            """parent_id → its best-ranked entry (first occurrence wins)."""
+            if not dedup:
+                return results
+            seen, out = set(), []
+            for r in results:
+                k = r.get("parent_id", "")
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(r)
+            return out
 
         fused: dict = {}
-        for rank, r in enumerate(vector_results, 1):
-            k = _key(r)
-            d = fused.setdefault(k, {"entry": r, "rrf": 0.0, "hits": []})
-            d["rrf"] += 1.0 / (RRF_K + rank)
-            d["hits"].append("vec")
-        for rank, r in enumerate(bm25_results, 1):
-            k = _key(r)
-            d = fused.setdefault(k, {"entry": r, "rrf": 0.0, "hits": []})
-            d["rrf"] += 1.0 / (RRF_K + rank)
-            d["hits"].append("bm25")
+        for channel, results, dedup in (
+                ("vec", vector_results, mode == "full"),
+                ("bm25", bm25_results, mode != "off")):
+            for rank, r in enumerate(_channel_dedup(results, dedup), 1):
+                k = r.get("parent_id", "")
+                d = fused.setdefault(k, {"entry": r, "rrf": 0.0, "hits": []})
+                d["rrf"] += 1.0 / (RRF_K + rank)
+                d["hits"].append(channel)
         ranked = sorted(fused.values(), key=lambda d: -d["rrf"])[:top_k]
         out = []
         for d in ranked:
@@ -385,11 +422,19 @@ class HybridIndex:
                where_source: Optional[str] = None) -> List[dict]:
         """One-call hybrid: caller supplies dense results, we add BM25 + fuse.
         If FTS index is empty, returns vector_results unchanged (graceful
-        degradation — the agent never breaks because BM25 is missing)."""
+        degradation — the agent never breaks because BM25 is missing).
+
+        Pool symmetry: BOTH channels contribute top_k*3 candidates so RRF
+        ranks are earned, not biased by an asymmetric pool depth (a 6-deep
+        dense list vs an 18-deep bm25 list hands the fusion to bm25's tail).
+        Callers already pass limit-sized dense lists, so the widening to
+        top_k*3 happens in the RETRIEVAL wrapper, not here — anything past
+        top_k*3 entries is dropped to keep both channels equal-footed."""
         if self.indexed_sources() == 0:
             return vector_results[:top_k]
         bm = self.bm25_search(query, limit=top_k * 3, where_source=where_source)
-        return self.rrf_fuse(vector_results, bm, top_k=top_k)
+        vec = vector_results[:top_k * 3]
+        return self.rrf_fuse(vec, bm, top_k=top_k)
 
 
 def is_available() -> bool:
