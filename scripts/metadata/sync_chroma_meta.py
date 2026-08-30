@@ -37,13 +37,22 @@ FIELDS = ("title", "authors", "year", "journal", "doi", "pmid", "pmcid")
 
 
 def load_parent_meta(parent_dir: Path) -> dict:
-    """source.md -> fixed meta dict (chunk[0].meta of each parent file)."""
+    """source.md -> fixed meta dict.
+
+    Keyed by the chunk's `source` field (the full, untruncated md filename) —
+    NOT the file stem: parent_store filenames truncate at 255 bytes, so stems
+    of long-titled papers don't match their chroma `source` values. The
+    `meta.source` field is unreliable (often absent); chunk[0]['source'] is
+    the authoritative key.
+    """
     out = {}
     for p in parent_dir.glob("*.json"):
         try:
             chunks = json.loads(p.read_text())
             if isinstance(chunks, list) and chunks and isinstance(chunks[0].get("meta"), dict):
-                out[chunks[0]["meta"].get("source") or chunks[0].get("source", "")] = chunks[0]["meta"]
+                key = chunks[0].get("source", "")
+                if key:
+                    out[key] = chunks[0]["meta"]
         except (json.JSONDecodeError, OSError, IndexError, AttributeError):
             continue
     return out

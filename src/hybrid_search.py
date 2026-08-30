@@ -199,10 +199,30 @@ class HybridIndex:
     def _children_for_source(self, source: str) -> List[dict]:
         """Re-chunk one source's parents into children (same logic as build)."""
         cfg = get_config()
-        safe = re.sub(r"[^\w\-]", "_", source)[:100]
-        path = os.path.join(cfg["parent_store_dir"], f"{safe}.json")
+        store = cfg["parent_store_dir"]
+        # 0. Exact stem: rebuild() passes the parent filename stem verbatim.
+        #    Stems legally contain unicode (‐ U+2010, curly quotes, é, 等 …)
+        #    that sanitize() below would rewrite to '_', so try the literal
+        #    file first — this is the only correct lookup for stem callers.
+        path = os.path.join(store, f"{source}.json")
+        safe = None
         if not os.path.exists(path):
-            return []
+            safe = re.sub(r"[^\w\-]", "_", source)[:100]
+            path = os.path.join(store, f"{safe}.json")
+        if not os.path.exists(path):
+            # Long-titled papers: sanitize()[:100] truncates the stem, so the
+            # exact filename doesn't exist. Fall back to prefix match — the
+            # truncated safe name is still a unique prefix of the real file.
+            assert safe is not None  # only reachable when sanitize path ran
+            cands = [f for f in os.listdir(store)
+                     if f.startswith(safe[:80]) and f.endswith(".json")]
+            if len(cands) == 1:
+                path = os.path.join(store, cands[0])
+            elif len(cands) > 1:
+                # prefer the shortest (closest to the truncated name)
+                path = os.path.join(store, min(cands, key=len))
+            else:
+                return []
         with open(path, encoding="utf-8") as f:
             parents = json.load(f)
         children: List[dict] = []

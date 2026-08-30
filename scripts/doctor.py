@@ -173,7 +173,7 @@ def check_index_drift(cfg: dict, strict: bool = False) -> List[CheckResult]:
             f"{n_chunks} chunks, {chroma_parents} parents, "
             f"{len(chroma_sources)} sources"))
 
-        ps_files = {f[:-5] for f in os.listdir(cfg["parent_store_dir"])
+        ps_files = {_sanitize(f[:-5]) for f in os.listdir(cfg["parent_store_dir"])
                     if f.endswith(".json")}
         mapped = {_sanitize(s) for s in chroma_sources}
 
@@ -322,8 +322,8 @@ def check_reference_graph(cfg: dict) -> List[CheckResult]:
         f"{orphans} papers without outgoing edges (normal: many lack "
         "parseable reference tails)")]
     # graph ↔ parent_store set parity
-    ps_sources = {f[:-5] for f in os.listdir(cfg["parent_store_dir"])
-                  if f.endswith(".json")}
+    ps_sources = {_sanitize(f[:-5]) for f in os.listdir(cfg["parent_store_dir"])
+                   if f.endswith(".json")}
     gp = {_sanitize(s) for s in papers}
     only_graph = gp - ps_sources
     only_ps = ps_sources - gp
