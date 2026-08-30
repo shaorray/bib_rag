@@ -28,10 +28,14 @@ def route_after_rewrite(state: State) -> list:
     if not state.get("questionIsClear", False):
         return "request_clarification"
     else:
+        # HyDE passage rides to EVERY subgraph (one passage covers the
+        # topic; each sub-question probes it from its own angle).
+        hyde = state.get("hydePassage", "") or ""
         return [
             Send(
                 "agent",
-                {"question": query, "question_index": idx, "messages": []},
+                {"question": query, "question_index": idx, "messages": [],
+                 "hydePassage": hyde},
             )
             for idx, query in enumerate(state["rewrittenQuestions"])
         ]

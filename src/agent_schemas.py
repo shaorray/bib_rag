@@ -40,6 +40,16 @@ class QueryAnalysis(BaseModel):
     questions: List[str] = Field(
         description="List of rewritten, self-contained queries for document retrieval."
     )
+    hyde_passage: str = Field(
+        default="",
+        description=(
+            "A short hypothetical document passage (2-3 sentences) that a "
+            "paper containing the answer to the user's question would "
+            "plausibly contain. Written in the domain's terminology, "
+            "declarative voice, no citations. Empty when the question is "
+            "unclear."
+        ),
+    )
     clarification_needed: str = Field(
         description="Explanation of why the question needs clarification."
     )
@@ -60,6 +70,10 @@ class State(MessagesState):
     conversation_summary: str = ""
     originalQuery: str = ""
     rewrittenQuestions: List[str] = []
+    # HyDE passage (QueryAnalysis.hyde_passage): fanned out to every agent
+    # subgraph, consumed by the mandatory first search (appended to the
+    # query so one embedding covers question + answer-shaped passage).
+    hydePassage: str = ""
     agent_answers: Annotated[List[dict], accumulate_or_reset] = []
 
 
@@ -80,6 +94,11 @@ class AgentState(MessagesState):
     question: str = ""
     question_index: int = 0
     context_summary: str = ""
+    # HyDE passage for THIS subgraph's question (from the parent graph's
+    # State.hydePassage via the Send fan-out); consumed by the mandatory
+    # first search — appended to the query text so ONE embedding round
+    # covers question + answer-shaped passage.
+    hydePassage: str = ""
     retrieval_keys: Annotated[Set[str], set_union] = set()
     final_answer: str = ""
     # Deterministic citation-guard note from collect_answer (empty when the

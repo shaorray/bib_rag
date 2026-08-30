@@ -47,8 +47,9 @@ except ImportError:  # direct script execution (scripts/build_fts_index.py)
     from kb_config import get_config
     import chunking
 
-# RRF constant (k=60 is the literature standard, used by DocsGPT/seerai)
-RRF_K = 60
+# RRF constant (k=60 is the literature standard, used by DocsGPT/seerai).
+# Env-tunable for A/B ablation (eval harness sets env before import).
+RRF_K = int(os.environ.get("RRF_K", "60"))
 
 # FTS5 query sanitization: strip operators/quotes that would error
 _FTS_BAD = re.compile(r'["\^{}()\[\]*:]')

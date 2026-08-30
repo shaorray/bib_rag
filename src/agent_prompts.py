@@ -61,7 +61,16 @@ Rules:
    - Each sub-query must remain semantically equivalent to its part of the original
    - Do not expand, enrich, or reinterpret the meaning
 
-5. Failure handling:
+5. Hypothetical passage (hyde_passage):
+   - ALSO write a short hypothetical document passage (2-3 sentences): the
+     kind of text a paper that answers the user's question would contain
+   - Use the domain's own terminology and declarative voice; no citations,
+     no hedging — write it as if it IS from the paper
+   - This drives an auxiliary retrieval probe (answer-to-question matches
+     answer-bearing text better than question-to-text); for an unclear
+     question return it empty
+
+6. Failure handling:
    - If the query intent is unclear or unintelligible, mark as "unclear"
 
 Input:
