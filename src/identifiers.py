@@ -46,6 +46,37 @@ def has_fullwidth(s: str) -> bool:
     return any(unicodedata.normalize("NFKC", ch) != ch for ch in s)
 
 
+# Suffixes that mark a truncated junk extraction (never a real DOI suffix).
+_JUNK_DOI_SUFFIX = {"journal", "journal."}
+
+
+def extract_doi(raw: str) -> str:
+    """Best-effort CLEAN DOI from a mangled raw string; '' when none found.
+
+    Handles the shapes PDF-to-metadata pipelines leave behind:
+      '10.1016/x](https://doi.org/10.1016/x)'   markdown link tail
+      '10.1038/x**'                             emphasis debris
+      '10.1038/](https://doi.org/10.1038/y)'    bare half truncated, link OK
+      '10.1371/journal.'                        truncated junk
+      '１０．２０１０３／ｊ．…'                    full-width CJK glyphs
+    Candidates are collected from doi.org links AND bare 10.x/ runs; the
+    longest plausible candidate wins (truncated prefixes lose to the full
+    form inside the link). Caller must still verify (Crossref) before
+    trusting the result — this is extraction, not validation.
+    """
+    raw = unicodedata.normalize("NFKC", str(raw or ""))
+    cands: list = []
+    cands += re.findall(r"(?:dx\.)?doi\.org/(10\.[^\s\)\]\*]+)", raw)
+    cands += re.findall(r"(10\.\d{4,5}/[^\s\)\]\*]+)", raw)
+    # cut URL/query debris some sources glue on (?urlappend=…&jav=…)
+    cands = [re.split(r"[?&]", c)[0] for c in cands]
+    cands = [c.rstrip(".,;)") for c in cands]
+    good = [c for c in cands
+            if len(c.split("/", 1)[1]) >= 5
+            and c.split("/", 1)[1].lower() not in _JUNK_DOI_SUFFIX]
+    return max(good, key=len) if good else ""
+
+
 def normalize_doi(raw: str) -> Optional[str]:
     """Extract & canonicalize a DOI from arbitrary input. None when absent.
 

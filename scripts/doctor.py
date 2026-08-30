@@ -450,26 +450,63 @@ def _write_doi_report(cfg: dict, out_path: str, junk: List[tuple],
 
 
 # ---------------------------------------------------------------------------
-# C4b — parent metadata quality (DOI / authors / year) + full-width repair
+# C4b — parent metadata quality (DOI / authors / year) + deterministic repair
 # ---------------------------------------------------------------------------
 
-_META_JUNK_JOURNAL = {"", "as of", "the", "article", "research", "journal"}
-_META_YEAR_RE = re.compile(r"^(19|20)\d{2}$")
+_META_JUNK_JOURNAL = {"as of", "the", "article", "research", "journal"}
+_META_CLEAN_DOI = re.compile(r"^10\.\d{4,5}/\S+$")
+
+
+def _meta_year_ok(y: str) -> bool:
+    """Plausible publication year: 1900..current+1 (not 1850/2030/2050)."""
+    import datetime
+    if not re.match(r"^(19|20)\d{2}$", y or ""):
+        return False
+    return 1900 <= int(y) <= datetime.date.today().year + 1
+
+
+def _rewrite_parent_meta(path: str, chunks: list, updates: dict) -> None:
+    """Apply {field: new_value} to every chunk's meta; atomic write."""
+    for ch in chunks:
+        m = ch.get("meta")
+        if isinstance(m, dict):
+            m.update(updates)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
 
 
 def check_meta_quality(cfg: dict, repair: bool = False) -> List[CheckResult]:
     """Sanity-audit title/authors/year/journal/doi in every parent file.
 
-    Full-width CJK DOIs (１０．２０１０３／…) are REPAIRED in place when
-    repair=True (default): NFKC folding is lossless and reversible, and the
-    junk-DOI state otherwise hides the paper from every DOI join. All other
-    findings are reported only — repair belongs to backfill/meta_audit tools.
+    Findings: no-authors, implausible years, junk journals ('As of',
+    digits-only), mangled DOIs (markdown link tails, truncations), full-width
+    CJK DOIs, filename-form titles.
+
+    repair=True applies DETERMINISTIC local fixes only — operations that
+    never need the network and never invent data:
+      * full-width DOI (meta or content)  → NFKC fold in place
+      * mangled DOI with extractable form → replace with extracted DOI
+      * junk journal                      → clear (backfill refills it)
+      * out-of-range year (2030/1850/'' ) → clear (backfill refills it)
+    In-range but possibly-wrong years (1941) are left alone: only a
+    Crossref verification can safely correct those — that is
+    scripts/metadata/repair_meta.py, not doctor.
     """
+    from identifiers import extract_doi, has_fullwidth, normalize_doi
+    import unicodedata
+
     out: List[CheckResult] = []
     store = cfg["parent_store_dir"]
     files = sorted(f for f in os.listdir(store) if f.endswith(".json"))
 
-    no_authors, bad_year, dirty_doi, fullwidth_doi, re_files, bad_journal = [], [], [], [], [], []
+    findings = {
+        "no_authors": [], "bad_year": [], "junk_journal": [],
+        "mangled_doi": [], "fullwidth_doi": [], "filename_title": [],
+    }
+    repairs = []   # (fname, description) for the meta_repair result
+
     for fname in files:
         path = os.path.join(store, fname)
         try:
@@ -480,85 +517,86 @@ def check_meta_quality(cfg: dict, repair: bool = False) -> List[CheckResult]:
         if not (isinstance(chunks, list) and chunks and isinstance(chunks[0], dict)):
             continue
         meta = chunks[0].get("meta") or {}
+        updates: dict = {}
+
         authors = (meta.get("authors") or "").strip()
         year = str(meta.get("year") or "").strip()
         journal = (meta.get("journal") or "").strip()
+        title = (meta.get("title") or "").strip()
         doi_raw = (meta.get("doi") or "").strip()
+
         if not authors:
-            no_authors.append(fname)
-        if not _META_YEAR_RE.match(year):
-            bad_year.append((fname, year))
+            findings["no_authors"].append(fname)
+        if not _meta_year_ok(year):
+            findings["bad_year"].append((fname, year))
+            if repair and year:            # '' is absence, not damage
+                updates["year"] = ""
         if journal and (journal.lower() in _META_JUNK_JOURNAL
                         or journal.isdigit()):
-            bad_journal.append((fname, journal))
-        if doi_raw:
-            from identifiers import normalize_doi, has_fullwidth
-            if has_fullwidth(doi_raw):
-                fullwidth_doi.append((fname, doi_raw))
-                if repair:
-                    # NFKC-fold the DOI in every chunk's meta, in place
-                    import unicodedata
-                    folded = unicodedata.normalize("NFKC", doi_raw)
-                    norm = normalize_doi(folded) or folded
-                    for ch in chunks:
-                        m = ch.get("meta")
-                        if isinstance(m, dict):
-                            m["doi"] = norm
-                    tmp = path + ".tmp"
-                    with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump(chunks, f, ensure_ascii=False, indent=1)
-                    os.replace(tmp, path)
-                    re_files.append(fname)
-            elif normalize_doi(doi_raw) is None or not re.match(
-                    r"^10\.\d{4,5}/\S+$", normalize_doi(doi_raw) or ""):
-                dirty_doi.append((fname, doi_raw[:60]))
-        elif repair and not (meta.get("title") or "").strip() \
-                and not (meta.get("authors") or "").strip():
-            # Empty meta + empty DOI: Chinese-journal PDFs put the DOI in the
-            # extracted text as FULL-WIDTH glyphs (１０．２０１０３／…). Scan the
-            # first chunks' content; fold + store the DOI if found.
-            from identifiers import normalize_doi, has_fullwidth
-            import unicodedata
-            head = "\n".join(
-                (ch.get("content") or "") for ch in chunks[:2])[:2000]
-            if has_fullwidth(head):
-                m_doi = re.search(
-                    r"(10\.\d{4,5}/[^\s，,；;）)\]】\s]+)",
-                    unicodedata.normalize("NFKC", head))
-                if m_doi:
-                    norm = normalize_doi(m_doi.group(1)) or m_doi.group(1)
-                    for ch in chunks:
-                        m = ch.get("meta")
-                        if isinstance(m, dict):
-                            m["doi"] = norm
-                    tmp = path + ".tmp"
-                    with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump(chunks, f, ensure_ascii=False, indent=1)
-                    os.replace(tmp, path)
-                    fullwidth_doi.append((fname, m_doi.group(1)))
-                    re_files.append(fname)
+            findings["junk_journal"].append((fname, journal))
+            if repair:
+                updates["journal"] = ""
 
-    msg = (f"{len(files)} parents: {len(no_authors)} no-authors, "
-           f"{len(bad_year)} bad-year, {len(dirty_doi)} mangled-DOI, "
-           f"{len(bad_journal)} junk-journal"
-           + (f", {len(fullwidth_doi)} full-width DOI "
+        # --- DOI: full-width fold / mangled extraction / content salvage ---
+        if doi_raw and has_fullwidth(doi_raw):
+            findings["fullwidth_doi"].append((fname, doi_raw[:60]))
+            if repair:
+                norm = normalize_doi(doi_raw) or unicodedata.normalize(
+                    "NFKC", doi_raw)
+                updates["doi"] = norm
+        elif doi_raw and not _META_CLEAN_DOI.match(
+                unicodedata.normalize("NFKC", doi_raw)):
+            best = extract_doi(doi_raw)
+            if best:
+                findings["mangled_doi"].append((fname, doi_raw[:60]))
+                if repair:
+                    updates["doi"] = best
+            else:
+                findings["mangled_doi"].append((fname, doi_raw[:60]))
+        elif not doi_raw:
+            # No DOI at all: salvage one from the first chunks' content.
+            # Chinese-journal PDFs keep it full-width in the body text.
+            head = "\n".join((ch.get("content") or "")
+                             for ch in chunks[:2])[:2000]
+            best = extract_doi(head)
+            if best and has_fullwidth(head):
+                findings["fullwidth_doi"].append((fname, f"(content) {best}"))
+                if repair:
+                    updates["doi"] = best
+
+        if title and re.match(r"^(RE\d+ - |\d{6,} )", title):
+            findings["filename_title"].append((fname, title[:60]))
+
+        if repair and updates:
+            _rewrite_parent_meta(path, chunks, updates)
+            repairs.append((fname, ", ".join(sorted(updates))))
+
+    f = findings
+    msg = (f"{len(files)} parents: {len(f['no_authors'])} no-authors, "
+           f"{len(f['bad_year'])} bad-year, {len(f['mangled_doi'])} mangled-DOI, "
+           f"{len(f['junk_journal'])} junk-journal, {len(f['filename_title'])} filename-title"
+           + (f", {len(f['fullwidth_doi'])} full-width DOI "
               f"({'repaired' if repair else 'repair available'})"
-              if fullwidth_doi else ""))
-    status = OK if not (no_authors or bad_year or dirty_doi
-                        or bad_journal or fullwidth_doi) else WARN
+              if f["fullwidth_doi"] else ""))
+    status = OK if not any(f.values()) else WARN
     remedy = ""
-    if no_authors or bad_year or dirty_doi:
-        remedy = "python3 -B scripts/metadata/backfill_all.py (or meta_audit --apply)"
-    if fullwidth_doi and not repair:
-        remedy = (remedy + "; " if remedy else "") + "doctor --repair-meta to fold full-width DOIs"
+    if f["no_authors"] or f["filename_title"] or (f["bad_year"] and not repair) \
+            or (f["mangled_doi"] and not repair):
+        remedy = "python3 scripts/metadata/repair_meta.py (Crossref-backed fill)"
+    if f["fullwidth_doi"] and not repair:
+        remedy = (remedy + "; " if remedy else "") + \
+            "doctor --repair-meta (deterministic local fixes)"
     out.append(CheckResult("meta_quality", status, msg, remedy=remedy,
-                           details=([f"no-authors: {n}" for n in no_authors[:3]]
-                                    + [f"bad-year: {n} ({y!r})" for n, y in bad_year[:3]]
-                                    + [f"mangled: {n} → {d!r}" for n, d in dirty_doi[:3]])))
-    if re_files:
+                           details=([f"no-authors: {n}" for n in f["no_authors"][:3]]
+                                    + [f"bad-year: {n} ({y!r})" for n, y in f["bad_year"][:3]]
+                                    + [f"mangled: {n} → {d!r}" for n, d in f["mangled_doi"][:3]]
+                                    + [f"junk-journal: {n} ({j!r})" for n, j in f["junk_journal"][:2]])))
+    if repairs:
         out.append(CheckResult(
             "meta_repair", OK,
-            f"folded full-width DOIs in {len(re_files)} parent file(s) in place"))
+            f"deterministic fixes in {len(repairs)} parent file(s): "
+            + "; ".join(f"{n} [{what}]" for n, what in repairs[:3])
+            + (" …" if len(repairs) > 3 else "")))
     return out
 
 

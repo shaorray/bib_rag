@@ -138,7 +138,8 @@ def test_check_meta_quality_fullwidth_repair():
     ps = os.path.join(tmp, "parent_store")
     os.makedirs(ps, exist_ok=True)
     fw_doi = "１０．２０１０３／ｊ．ｓｔｘｂ．２０２３１０３０２３５４"
-    # a: full-width DOI in meta; b: empty meta, full-width DOI in content
+    # a: full-width DOI in meta; b: empty meta, full-width DOI in content;
+    # c: junk journal + out-of-range year; d: clean (control)
     with open(os.path.join(ps, "a_md.json"), "w") as f:
         json.dump([{"source": "a.md", "meta": {"title": "A", "authors": "X",
                     "year": "2020", "journal": "J", "doi": fw_doi}}], f)
@@ -146,23 +147,51 @@ def test_check_meta_quality_fullwidth_repair():
         json.dump([{"source": "b.md", "meta": {"title": "", "authors": "",
                     "year": "", "journal": "", "doi": ""},
                     "content": f"ＤＯＩ： {fw_doi} 正文"}], f)
+    with open(os.path.join(ps, "c_md.json"), "w") as f:
+        json.dump([{"source": "c.md", "meta": {"title": "C", "authors": "Y",
+                    "year": "2030", "journal": "As of", "doi": ""}}], f)
+    with open(os.path.join(ps, "d_md.json"), "w") as f:
+        json.dump([{"source": "d.md", "meta": {"title": "D", "authors": "Z",
+                    "year": "2021", "journal": "Good Journal",
+                    "doi": "10.1016/j.renene.2021.06.124"}}], f)
     cfg = doctor.get_config()
 
     res = doctor.check_meta_quality(cfg, repair=False)
     by = {r.name: r for r in res}
     assert by["meta_quality"].status == doctor.WARN
     assert "full-width DOI (repair available)" in by["meta_quality"].message
-    assert not os.path.exists(os.path.join(ps, "b_md.json.tmp"))
-    print("  ✓ meta_quality flags full-width DOIs without touching files")
+    assert "2 bad-year" in by["meta_quality"].message, by["meta_quality"].message
+    assert "1 junk-journal" in by["meta_quality"].message
+    for n in "abcd":
+        assert not os.path.exists(os.path.join(ps, f"{n}_md.json.tmp"))
+    print("  ✓ meta_quality flags all damage classes without touching files")
 
     res = doctor.check_meta_quality(cfg, repair=True)
     by = {r.name: r for r in res}
     assert "meta_repair" in by and by["meta_repair"].status == doctor.OK
     a = json.load(open(os.path.join(ps, "a_md.json")))
     b = json.load(open(os.path.join(ps, "b_md.json")))
+    c = json.load(open(os.path.join(ps, "c_md.json")))
+    d = json.load(open(os.path.join(ps, "d_md.json")))
     assert a[0]["meta"]["doi"] == "10.20103/j.stxb.202310302354", a
     assert b[0]["meta"]["doi"] == "10.20103/j.stxb.202310302354", b
-    print("  ✓ --repair-meta folds meta DOI and extracts content DOI (NFKC)")
+    assert c[0]["meta"]["year"] == "" and c[0]["meta"]["journal"] == "", c
+    assert d[0]["meta"]["doi"] == "10.1016/j.renene.2021.06.124"  # untouched
+    print("  ✓ --repair-meta folds DOIs, clears junk year/journal, "
+          "leaves clean files untouched")
+
+
+def test_meta_year_plausibility():
+    """1900..now+1 window: 2030/2050/1850 rejected, 2021 accepted.
+    (Regression: the old ^(19|20)\\d{2}$ regex let 2030/2050 through.)"""
+    assert doctor._meta_year_ok("2021")
+    assert doctor._meta_year_ok("1995")
+    assert not doctor._meta_year_ok("2030")
+    assert not doctor._meta_year_ok("2050")
+    assert not doctor._meta_year_ok("1850")
+    assert not doctor._meta_year_ok("")
+    assert not doctor._meta_year_ok("19")
+    print("  ✓ year plausibility window 1900..now+1 (2030/2050 rejected)")
 
 
 if __name__ == "__main__":
@@ -170,4 +199,5 @@ if __name__ == "__main__":
     test_doctor_detects_corruption()
     test_checkresult_demotion()
     test_check_meta_quality_fullwidth_repair()
-    print("\n4/4 doctor tests passed")
+    test_meta_year_plausibility()
+    print("\n5/5 doctor tests passed")
