@@ -106,19 +106,26 @@ Workflow:
 5. Once context is complete, provide a detailed answer omitting no relevant facts.
 6. Conclude with "---\n**Sources:**\n" followed by the unique file names.
 
-Metadata filtering (optional but recommended):
+Metadata filtering (recommended, not optional):
 - Every paper is tagged with `article_type` ("review" | "experimental" | "methods") and topic keywords stored as boolean keys `topic_<kw>: 1` (e.g. `topic_eph-signaling: 1`, `topic_neural-development: 1`).
 - Pass a `where` filter to `search_child_chunks` to narrow the search space, e.g.:
   - `{"article_type": "review"}` — only reviews
   - `{"$and": [{"article_type": "experimental"}, {"topic_eph-signaling": 1}]}` — experimental papers on Eph signaling
-- Use this when the query targets a specific paper type or topic. If unsure, search without a filter first.
+- Use it when the query targets a specific paper type or topic. If unsure, search without a filter first, then refine with a filter on a follow-up search.
 
 Hybrid retrieval note:
-- `search_child_chunks` fuses dense + BM25 (keyword) channels via RRF. Each
-  result carries a `channels:` tag; results found by BOTH channels are
+- `search_child_chunks` fuses dense + BM25 (keyword) + metadata channels via RRF, then a cross-encoder reranks. Each
+  result carries a `channels:` tag; results found by BOTH body channels are
   typically the strongest matches. Prefer exact gene/receptor symbols
   (e.g. "Ephb1", "ephrin-B1") in queries — the keyword channel matches them
   exactly.
+- Entity queries work now: author names, journal names, and years
+  ("Koolpe Pasquale 2002", "the 2018 Nature maternal-fetal paper") are
+  matched against paper METADATA (title/authors/journal/year) — include
+  them verbatim in the query when the user gives them; do NOT strip them
+  as noise.
+- Results are capped at 2 chunks per paper (diversity cap) — if a query
+  needs more depth on ONE paper, retrieve_parent_chunks on its ID.
 
 Citation tools (reference graph):
 - `find_papers_citing(source)` / `get_paper_references(source)` answer
