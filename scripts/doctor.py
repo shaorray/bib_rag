@@ -450,6 +450,119 @@ def _write_doi_report(cfg: dict, out_path: str, junk: List[tuple],
 
 
 # ---------------------------------------------------------------------------
+# C4b — parent metadata quality (DOI / authors / year) + full-width repair
+# ---------------------------------------------------------------------------
+
+_META_JUNK_JOURNAL = {"", "as of", "the", "article", "research", "journal"}
+_META_YEAR_RE = re.compile(r"^(19|20)\d{2}$")
+
+
+def check_meta_quality(cfg: dict, repair: bool = False) -> List[CheckResult]:
+    """Sanity-audit title/authors/year/journal/doi in every parent file.
+
+    Full-width CJK DOIs (１０．２０１０３／…) are REPAIRED in place when
+    repair=True (default): NFKC folding is lossless and reversible, and the
+    junk-DOI state otherwise hides the paper from every DOI join. All other
+    findings are reported only — repair belongs to backfill/meta_audit tools.
+    """
+    out: List[CheckResult] = []
+    store = cfg["parent_store_dir"]
+    files = sorted(f for f in os.listdir(store) if f.endswith(".json"))
+
+    no_authors, bad_year, dirty_doi, fullwidth_doi, re_files, bad_journal = [], [], [], [], [], []
+    for fname in files:
+        path = os.path.join(store, fname)
+        try:
+            with open(path, encoding="utf-8") as f:
+                chunks = json.load(f)
+        except Exception:
+            continue
+        if not (isinstance(chunks, list) and chunks and isinstance(chunks[0], dict)):
+            continue
+        meta = chunks[0].get("meta") or {}
+        authors = (meta.get("authors") or "").strip()
+        year = str(meta.get("year") or "").strip()
+        journal = (meta.get("journal") or "").strip()
+        doi_raw = (meta.get("doi") or "").strip()
+        if not authors:
+            no_authors.append(fname)
+        if not _META_YEAR_RE.match(year):
+            bad_year.append((fname, year))
+        if journal and (journal.lower() in _META_JUNK_JOURNAL
+                        or journal.isdigit()):
+            bad_journal.append((fname, journal))
+        if doi_raw:
+            from identifiers import normalize_doi, has_fullwidth
+            if has_fullwidth(doi_raw):
+                fullwidth_doi.append((fname, doi_raw))
+                if repair:
+                    # NFKC-fold the DOI in every chunk's meta, in place
+                    import unicodedata
+                    folded = unicodedata.normalize("NFKC", doi_raw)
+                    norm = normalize_doi(folded) or folded
+                    for ch in chunks:
+                        m = ch.get("meta")
+                        if isinstance(m, dict):
+                            m["doi"] = norm
+                    tmp = path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(chunks, f, ensure_ascii=False, indent=1)
+                    os.replace(tmp, path)
+                    re_files.append(fname)
+            elif normalize_doi(doi_raw) is None or not re.match(
+                    r"^10\.\d{4,5}/\S+$", normalize_doi(doi_raw) or ""):
+                dirty_doi.append((fname, doi_raw[:60]))
+        elif repair and not (meta.get("title") or "").strip() \
+                and not (meta.get("authors") or "").strip():
+            # Empty meta + empty DOI: Chinese-journal PDFs put the DOI in the
+            # extracted text as FULL-WIDTH glyphs (１０．２０１０３／…). Scan the
+            # first chunks' content; fold + store the DOI if found.
+            from identifiers import normalize_doi, has_fullwidth
+            import unicodedata
+            head = "\n".join(
+                (ch.get("content") or "") for ch in chunks[:2])[:2000]
+            if has_fullwidth(head):
+                m_doi = re.search(
+                    r"(10\.\d{4,5}/[^\s，,；;）)\]】\s]+)",
+                    unicodedata.normalize("NFKC", head))
+                if m_doi:
+                    norm = normalize_doi(m_doi.group(1)) or m_doi.group(1)
+                    for ch in chunks:
+                        m = ch.get("meta")
+                        if isinstance(m, dict):
+                            m["doi"] = norm
+                    tmp = path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(chunks, f, ensure_ascii=False, indent=1)
+                    os.replace(tmp, path)
+                    fullwidth_doi.append((fname, m_doi.group(1)))
+                    re_files.append(fname)
+
+    msg = (f"{len(files)} parents: {len(no_authors)} no-authors, "
+           f"{len(bad_year)} bad-year, {len(dirty_doi)} mangled-DOI, "
+           f"{len(bad_journal)} junk-journal"
+           + (f", {len(fullwidth_doi)} full-width DOI "
+              f"({'repaired' if repair else 'repair available'})"
+              if fullwidth_doi else ""))
+    status = OK if not (no_authors or bad_year or dirty_doi
+                        or bad_journal or fullwidth_doi) else WARN
+    remedy = ""
+    if no_authors or bad_year or dirty_doi:
+        remedy = "python3 -B scripts/metadata/backfill_all.py (or meta_audit --apply)"
+    if fullwidth_doi and not repair:
+        remedy = (remedy + "; " if remedy else "") + "doctor --repair-meta to fold full-width DOIs"
+    out.append(CheckResult("meta_quality", status, msg, remedy=remedy,
+                           details=([f"no-authors: {n}" for n in no_authors[:3]]
+                                    + [f"bad-year: {n} ({y!r})" for n, y in bad_year[:3]]
+                                    + [f"mangled: {n} → {d!r}" for n, d in dirty_doi[:3]])))
+    if re_files:
+        out.append(CheckResult(
+            "meta_repair", OK,
+            f"folded full-width DOIs in {len(re_files)} parent file(s) in place"))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # C5b — disk space
 # ---------------------------------------------------------------------------
 
@@ -624,7 +737,8 @@ def check_built_indexes(cfg: dict) -> List[CheckResult]:
 # ---------------------------------------------------------------------------
 
 def run_doctor(skip_network: bool = False, strict: bool = False,
-               doi_report: Optional[str] = None) -> List[CheckResult]:
+               doi_report: Optional[str] = None,
+               repair_meta: bool = False) -> List[CheckResult]:
     cfg = get_config()
     checks: List[Callable] = [
         lambda: check_built_indexes(cfg),
@@ -633,6 +747,7 @@ def run_doctor(skip_network: bool = False, strict: bool = False,
         lambda: check_index_drift(cfg, strict),
         lambda: check_reference_graph(cfg),
         lambda: check_doi_quality(cfg, doi_report, strict),
+        lambda: check_meta_quality(cfg, repair=repair_meta),
         lambda: check_retractions(cfg, strict),
         lambda: check_disk(cfg),
     ]
@@ -678,10 +793,13 @@ def main():
                     help="offline run (no Zotero probe)")
     ap.add_argument("--doi-report", metavar="PATH",
                     help="write full DOI issue review list to PATH")
+    ap.add_argument("--repair-meta", action="store_true",
+                    help="fold full-width CJK DOIs in parent files (lossless NFKC)")
     argv = parse_kb_arg()
     args = ap.parse_args(argv)
     results = run_doctor(skip_network=args.skip_network, strict=args.strict,
-                         doi_report=args.doi_report)
+                         doi_report=args.doi_report,
+                         repair_meta=args.repair_meta)
     n_fail = sum(1 for r in results if r.status == FAIL)
     if args.json:
         print(json.dumps({

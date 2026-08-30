@@ -127,8 +127,47 @@ def test_checkresult_demotion():
     print("  ✓ CheckResult demotion: doi_quality→INFO by default, strict shows")
 
 
+def test_check_meta_quality_fullwidth_repair():
+    tmp = tempfile.mkdtemp(prefix="bib_rag_doctor3_")
+    os.environ["BIB_RAG_ROOT"] = tmp
+    os.environ.pop("BIB_RAG_KB_NAME", None)
+    import importlib
+    import kb_config
+    importlib.reload(kb_config)
+    importlib.reload(doctor)
+    ps = os.path.join(tmp, "parent_store")
+    os.makedirs(ps, exist_ok=True)
+    fw_doi = "１０．２０１０３／ｊ．ｓｔｘｂ．２０２３１０３０２３５４"
+    # a: full-width DOI in meta; b: empty meta, full-width DOI in content
+    with open(os.path.join(ps, "a_md.json"), "w") as f:
+        json.dump([{"source": "a.md", "meta": {"title": "A", "authors": "X",
+                    "year": "2020", "journal": "J", "doi": fw_doi}}], f)
+    with open(os.path.join(ps, "b_md.json"), "w") as f:
+        json.dump([{"source": "b.md", "meta": {"title": "", "authors": "",
+                    "year": "", "journal": "", "doi": ""},
+                    "content": f"ＤＯＩ： {fw_doi} 正文"}], f)
+    cfg = doctor.get_config()
+
+    res = doctor.check_meta_quality(cfg, repair=False)
+    by = {r.name: r for r in res}
+    assert by["meta_quality"].status == doctor.WARN
+    assert "full-width DOI (repair available)" in by["meta_quality"].message
+    assert not os.path.exists(os.path.join(ps, "b_md.json.tmp"))
+    print("  ✓ meta_quality flags full-width DOIs without touching files")
+
+    res = doctor.check_meta_quality(cfg, repair=True)
+    by = {r.name: r for r in res}
+    assert "meta_repair" in by and by["meta_repair"].status == doctor.OK
+    a = json.load(open(os.path.join(ps, "a_md.json")))
+    b = json.load(open(os.path.join(ps, "b_md.json")))
+    assert a[0]["meta"]["doi"] == "10.20103/j.stxb.202310302354", a
+    assert b[0]["meta"]["doi"] == "10.20103/j.stxb.202310302354", b
+    print("  ✓ --repair-meta folds meta DOI and extracts content DOI (NFKC)")
+
+
 if __name__ == "__main__":
     test_doctor_offline_all_checks()
     test_doctor_detects_corruption()
     test_checkresult_demotion()
-    print("\n3/3 doctor tests passed")
+    test_check_meta_quality_fullwidth_repair()
+    print("\n4/4 doctor tests passed")

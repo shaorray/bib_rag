@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from typing import Optional, Tuple
 
 # --- DOI -------------------------------------------------------------------
@@ -35,6 +36,15 @@ _DOI_BODY_RE = re.compile(r"(10\.\d{4,9}/\S+)", re.I)
 # Version/annotation suffixes some sources append: .v2 / v3 / ?download=true
 _DOI_TRAIL_RE = re.compile(r"[)\]>,.;:!?'\"\s]+$")   # trailing punctuation
 
+# Full-width CJK variants (１０．２０１０３／ｊ．ｓｔｘｂ．…) — PDF text
+# extraction of Chinese journals keeps the glyphs full-width. NFKC folds
+# them to ASCII digits/punctuation so the DOI regex matches.
+def has_fullwidth(s: str) -> bool:
+    """True when the string contains full-width chars that NFKC would fold."""
+    if not s:
+        return False
+    return any(unicodedata.normalize("NFKC", ch) != ch for ch in s)
+
 
 def normalize_doi(raw: str) -> Optional[str]:
     """Extract & canonicalize a DOI from arbitrary input. None when absent.
@@ -44,7 +54,10 @@ def normalize_doi(raw: str) -> Optional[str]:
     """
     if not raw:
         return None
-    s = str(raw).strip()
+    # Fold full-width CJK glyph variants (１０．２０１０３ → 10.20103) before
+    # any regex runs — Chinese-journal PDFs extract with full-width digits.
+    raw = unicodedata.normalize("NFKC", str(raw))
+    s = raw.strip()
     # strip wrapping prefixes
     s = _DOI_PREFIX_RE.sub("", s)
     # find the actual doi body anywhere in the string
