@@ -196,6 +196,7 @@ class CrossrefClient:
                 "year": str(y) if y else "",
                 "journal": j,
                 "authors": a,
+                "type": it.get("type", ""),
             })
         return out
 

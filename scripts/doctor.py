@@ -454,6 +454,29 @@ def _write_doi_report(cfg: dict, out_path: str, junk: List[tuple],
 # ---------------------------------------------------------------------------
 
 _META_JUNK_JOURNAL = {"as of", "the", "article", "research", "journal"}
+
+
+def _meta_junk_journal(journal: str, doi: str) -> bool:
+    """PDF-debris journal check, with a DOI-based escape hatch.
+
+    Single dictionary words are usually scraped debris — EXCEPT when the
+    paper's own DOI registrant confirms them: 'Research' is a real AAAS
+    journal (10.34133/research.…), 'Science' likewise (10.1126/science.…).
+    A junk call with a matching DOI prefix is a false positive, so the
+    DOI vetoes the junk verdict."""
+    j = (journal or "").strip()
+    if not j or j.isdigit():
+        return True
+    if j.lower() in _META_JUNK_JOURNAL:
+        # a single-word venue must be confirmed by its DOI prefix segment
+        # ('research' ∈ 10.34133/research.0390, 'science' ∈ 10.1126/science.…)
+        d = (doi or "").strip().lower()
+        if d:
+            tail = d.split("/", 1)[1] if "/" in d else ""
+            if tail.startswith(j.lower() + ".") or tail.startswith(j.lower() + "/"):
+                return False   # DOI itself says this is the venue
+        return True
+    return False
 _META_CLEAN_DOI = re.compile(r"^10\.\d{4,5}/\S+$")
 
 
@@ -531,8 +554,7 @@ def check_meta_quality(cfg: dict, repair: bool = False) -> List[CheckResult]:
             findings["bad_year"].append((fname, year))
             if repair and year:            # '' is absence, not damage
                 updates["year"] = ""
-        if journal and (journal.lower() in _META_JUNK_JOURNAL
-                        or journal.isdigit()):
+        if journal and _meta_junk_journal(journal, doi_raw):
             findings["junk_journal"].append((fname, journal))
             if repair:
                 updates["journal"] = ""

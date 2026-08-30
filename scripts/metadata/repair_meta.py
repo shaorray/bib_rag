@@ -45,11 +45,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # metadata/ (meta_audi
 from kb_config import parse_kb_arg, get_config  # noqa: E402
 from identifiers import extract_doi, normalize_doi, has_fullwidth  # noqa: E402
 
-FILENAME_TITLE_RE = re.compile(r"^(RE\d+ - |\d{6,} - |10\.\d{4,5}/)")
+FILENAME_TITLE_RE = re.compile(r"^(RE\d+ - |\d{6,} - |10\.\d{4,5}/)"
+                               r"|^\*{0,2}\s*(https?://|doi\.org)")
 YEAR_TOLERANCE = 1          # |stored - verified| > 1 → replace
 TOKEN_OVERLAP_MIN = 0.6     # title-search guard against wrong-paper matches
 META_FIELDS = ("title", "authors", "year", "journal", "doi", "pmid", "pmcid")
 _META_CLEAN_DOI = re.compile(r"^10\.\d{4,5}/\S+$")
+# DOIs that point at supplemental material, not the paper itself
+# ('10.1242/jcs.111559/-/DC1', '10.7717/peerj.17164/supp-1', …)
+_SUPP_DOI = re.compile(r"(/-?/DC\d+|/supp|\.s\d+$|/assets?/|/figure/|/table/)", re.I)
 
 _JUNK_JOURNAL_WORDS = {"as of", "the", "article", "research", "journal", "in"}
 
@@ -83,6 +87,37 @@ def _token_overlap(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
+def _filename_year(stem: str) -> str:
+    """Librarian-supplied year from a 'Author_Year_Title' filename; '' when absent.
+
+    Filenames are the most trustworthy year source (they encode the librarian's
+    cataloging); used to arbitrate title-search hits whose year disagrees.
+    """
+    m = re.search(r"(?:^|_)((?:19|20)\d{2})(?:_|-|$)", stem)
+    return m.group(1) if m else ""
+
+
+def _hit_year_ok(clean_stored_doi: bool, fy: str, year: str,
+                 hit_year: str) -> bool:
+    """Year arbitration for a title-search hit (geo lesson: wrong-paper
+    matches show up as year jumps — a 1973 Nature hit for a 1999 paper).
+
+    The filename year outranks the stored year (librarian truth vs
+    PDF-extracted). Decision table:
+      clean stored DOI → only a filename-year-agreeing hit may upgrade it
+                         (arXiv → published form, published ≤1y later)
+      plausible year   → hit year must agree (±1) with the filename year,
+                         else the stored year
+      neither          → token overlap alone decides (return True)
+    """
+    year_anchor = fy or (year if _year_ok(year) else "")
+    if clean_stored_doi:
+        return bool(fy and hit_year and abs(int(fy) - int(hit_year)) <= 1)
+    if year_anchor:
+        return bool(hit_year and abs(int(year_anchor) - int(hit_year)) <= 1)
+    return True
+
+
 def _rewrite_parent(path: Path, chunks: list, updates: dict) -> None:
     for ch in chunks:
         m = ch.get("meta")
@@ -108,7 +143,10 @@ def needs_repair(meta: dict) -> bool:
             or not journal
             or _junk_journal(journal)
             or (bool(doi) and not _META_CLEAN_DOI.match(
-                unicodedata.normalize("NFKC", doi))))
+                unicodedata.normalize("NFKC", doi)))
+            # a DOI that points at supplemental material is a binding error:
+            # the paper should point at the article DOI, not its supplement
+            or bool(doi and _SUPP_DOI.search(doi)))
 
 
 def main(argv=None) -> int:
@@ -169,6 +207,11 @@ def main(argv=None) -> int:
             r"^(received|accepted|available|article|open access|"
             r"editorial|volume|issue|www|http)", title, re.I)
         if not rec and title_searchable:
+            # a stored CLEAN DOI that fails verify is a network artifact
+            # (Crossref gap), not evidence the DOI is wrong — title-search
+            # must never rewrite it (geo lesson: 23 papers corrupted that way)
+            clean_stored_doi = bool(doi_raw) and bool(_META_CLEAN_DOI.match(
+                unicodedata.normalize("NFKC", doi_raw)))
             hits = cx.search(title)
             for h in hits:
                 jt = (h.get("journal") or "").lower()
@@ -178,6 +221,21 @@ def main(argv=None) -> int:
                 if any(bad in jt for bad in (
                         "faculty opinions", "f1000", "peer review of",
                         "post-publication", "recommendation")):
+                    continue
+                # Crossref 'component' records are supplemental files, not
+                # papers — a title search must never bind a paper to its
+                # supplement's DOI (…/supp-1, .s47 …)
+                if (h.get("type") or "").lower() == "component":
+                    continue
+                # the hit's DOI must not itself look like a supplement
+                if _SUPP_DOI.search(h.get("doi") or ""):
+                    continue
+                # Year arbitration (see _hit_year_ok) — wrong-paper matches
+                # show up as year jumps; the filename year outranks the
+                # stored year (librarian truth vs PDF-extracted)
+                fy = _filename_year(p.stem)
+                if not _hit_year_ok(clean_stored_doi, fy, year,
+                                    h.get("year") or ""):
                     continue
                 if _token_overlap(h.get("title") or "", title) >= TOKEN_OVERLAP_MIN:
                     rec, via = h, "title-search"

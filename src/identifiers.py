@@ -58,23 +58,34 @@ def extract_doi(raw: str) -> str:
       '10.1038/x**'                             emphasis debris
       '10.1038/](https://doi.org/10.1038/y)'    bare half truncated, link OK
       '10.1371/journal.'                        truncated junk
+      '10.1016/s0306-4522(98)00526-0'           Elsevier year-coded parens
+      '10.1002/(SICI)…(1999)24:1/2<178::AID-…'  Wiley SICI (parens + <…>)
+      '10.1038/nature22041<br>Transmission'     html debris after the id
+      '10.1242/jcs.111559/-/DC1'                publisher supp-material path
       '１０．２０１０３／ｊ．…'                    full-width CJK glyphs
-    Candidates are collected from doi.org links AND bare 10.x/ runs; the
-    longest plausible candidate wins (truncated prefixes lose to the full
-    form inside the link). Caller must still verify (Crossref) before
-    trusting the result — this is extraction, not validation.
+
+    The run class keeps '(' ')' '<' '>' (SICI/Elsevier ids are full of them —
+    the old class stopped at the first ')', truncating every parenthesized
+    DOI so Crossref verify 404'd and repairs fell into title-search).
+    Debris is cut afterwards: URL query strings, html tags (letter-first
+    '<br>'/'</p>' — SICI '<178::…>' is digit-first and survives), trailing
+    punctuation, and '/-/DC1'-style supplemental paths. Candidates come from
+    any '10.x/' run (doi.org URLs contain one); the longest plausible wins.
+    Caller must still verify (Crossref) before trusting the result — this
+    is extraction, not validation.
     """
     raw = unicodedata.normalize("NFKC", str(raw or ""))
-    cands: list = []
-    cands += re.findall(r"(?:dx\.)?doi\.org/(10\.[^\s\)\]\*]+)", raw)
-    cands += re.findall(r"(10\.\d{4,5}/[^\s\)\]\*]+)", raw)
-    # cut URL/query debris some sources glue on (?urlappend=…&jav=…)
-    cands = [re.split(r"[?&]", c)[0] for c in cands]
-    cands = [c.rstrip(".,;)") for c in cands]
-    good = [c for c in cands
-            if len(c.split("/", 1)[1]) >= 5
-            and c.split("/", 1)[1].lower() not in _JUNK_DOI_SUFFIX]
-    return max(good, key=len) if good else ""
+    cands = re.findall(r"10\.\d{4,5}/[^\s\"'`*\]]+", raw)
+    out: list = []
+    for c in cands:
+        c = re.split(r"[?&]", c)[0]              # ?urlappend=…&jav=…
+        c = re.split(r"<[a-zA-Z/][^>]*>", c)[0]  # <br>, </p> html debris
+        c = c.rstrip(".,;)>")                    # trailing punctuation
+        c = re.split(r"/-?/DC\d+$", c)[0]        # publisher supp-material path
+        if (len(c.split("/", 1)[1]) >= 5
+                and c.split("/", 1)[1].lower() not in _JUNK_DOI_SUFFIX):
+            out.append(c)
+    return max(out, key=len) if out else ""
 
 
 def normalize_doi(raw: str) -> Optional[str]:
