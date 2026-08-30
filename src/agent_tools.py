@@ -113,6 +113,89 @@ class ToolFactory:
             print(f"❌ Embedding failed: {e}")
             return None
     
+    def _post_fusion(self, query: str, fused: List[dict],
+                     limit: int) -> List[dict]:
+        """Shared post-fusion pipeline: rerank → citation boost → source cap.
+
+        Both the first pass AND the broaden retry MUST go through this —
+        a weak first pass that broadens still deserves cross-encoder
+        precision and the diversity cap (broaden used to bypass all three,
+        shipping raw fusion order: found by the v3 regression test).
+        Each stage fails soft (env kill-switch / exception → skip stage).
+        """
+        # Cross-encoder rerank (bge-reranker-v2-m3 via /v1/rerank).
+        # RRF is rank-only; the cross-encoder reintroduces absolute
+        # (query, passage) relevance and catches terminology-misaligned
+        # matches bi-encoders score poorly. NOTE: rerank must NOT cut to
+        # limit here — the cap below does the final cut (cutting first
+        # would let backfill restore the very duplicates the cap removes).
+        if os.environ.get("RERANK", "1") != "0":
+            try:
+                try:
+                    from .reranker import rerank_results
+                except ImportError:  # src/ on sys.path directly (CLI/tests)
+                    from reranker import rerank_results
+                fused = rerank_results(query, fused)
+            except Exception:
+                pass
+
+        # Citation-graph proximity boost: anchors = top-2 reranked sources;
+        # pool entries that are 1-hop citation neighbors get a gentle
+        # multiplicative nudge (×1.05 cited-by / ×1.03 cites). Reranker
+        # scores are logits, so the factors are deliberately small.
+        if os.environ.get("RAG_CITE_BOOST", "1") != "0":
+            try:
+                try:
+                    from .reference_graph import load_graph, neighbors
+                except ImportError:
+                    from reference_graph import load_graph, neighbors
+                g = load_graph()
+                if g:
+                    anchors = [e.get("source", "") for e in fused[:2]]
+                    nbr: Dict[str, str] = {}
+                    for a in anchors:
+                        for s, info in neighbors(g, a).items():
+                            d = (info or {}).get("direction", "")
+                            if s not in nbr or d == "cited-by":
+                                nbr[s] = d
+                    for a in anchors:
+                        nbr.pop(a, None)
+                    if nbr:
+                        for e in fused:
+                            d = nbr.get(e.get("source", ""))
+                            if d:
+                                e["rerank_score"] = (
+                                    e.get("rerank_score") or 0.0) * (
+                                    1.05 if d == "cited-by" else 1.03)
+                        fused.sort(
+                            key=lambda x: -(x.get("rerank_score") or 0.0))
+            except Exception:
+                pass
+
+        # Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk the
+        # reranked pool keeping at most CAP entries per source until limit
+        # is filled; backfill from skipped extras only when the pool
+        # exhausts below limit (count contract).
+        try:
+            cap = max(1, int(os.environ.get("RAG_SOURCE_CAP", "2")))
+            counts: Dict[str, int] = {}
+            kept, skipped = [], []
+            for e in fused:
+                s = e.get("source", "")
+                if len(kept) >= limit:
+                    break
+                if counts.get(s, 0) >= cap:
+                    skipped.append(e)
+                else:
+                    counts[s] = counts.get(s, 0) + 1
+                    kept.append(e)
+            if len(kept) < limit:
+                kept.extend(skipped[:limit - len(kept)])
+            fused = kept
+        except Exception:
+            pass
+        return fused
+
     def _format_results(self, fused: List[dict], broadened: bool = False,
                         broaden_reasons: Optional[List[str]] = None) -> str:
         """Format search results for the agent (shared by both paths)."""
@@ -231,91 +314,10 @@ class ToolFactory:
             else:
                 fused = vector_entries
 
-            # Cross-encoder rerank (bge-reranker-v2-m3 via /v1/rerank).
-            # Post-fusion reordering: RRF is rank-only (score magnitude is
-            # thrown away by design), the cross-encoder reintroduces
-            # absolute (query, passage) relevance — it reads query and
-            # passage JOINTLY, catching terminology-misaligned matches
-            # bi-encoders score poorly. Env kill-switch RERANK=0. Fails
-            # soft: server down → fusion order stands.
-            # NOTE: rerank does NOT cut to limit here — the per-source cap
-            # below does the final cut, so rerank must hand it a pool deeper
-            # than limit (cutting first would let backfill restore the very
-            # duplicates the cap exists to remove).
-            if os.environ.get("RERANK", "1") != "0":
-                try:
-                    try:
-                        from .reranker import rerank_results
-                    except ImportError:  # src/ on sys.path directly (CLI/tests)
-                        from reranker import rerank_results
-                    fused = rerank_results(query, fused)
-                except Exception:
-                    pass
-
-            # Citation-graph proximity boost (env RAG_CITE_BOOST, default
-            # on). Anchors = top-2 sources of the reranked pool; any pool
-            # entry that is a 1-hop citation neighbor of an anchor gets
-            # multiplied by 1.05 (cited-by) or 1.03 (cites) — a small nudge
-            # that reorders pool-internal rank ties without teleporting
-            # irrelevant papers in. Reranker scores are logits; ±0.2 is a
-            # large move there, so the factors are deliberately gentle.
-            if os.environ.get("RAG_CITE_BOOST", "1") != "0":
-                try:
-                    try:
-                        from .reference_graph import load_graph, neighbors
-                    except ImportError:
-                        from reference_graph import load_graph, neighbors
-                    g = load_graph()
-                    if g:
-                        anchors = [e.get("source", "") for e in fused[:2]]
-                        nbr: Dict[str, str] = {}
-                        for a in anchors:
-                            for s, info in neighbors(g, a).items():
-                                d = (info or {}).get("direction", "")
-                                if s not in nbr or d == "cited-by":
-                                    nbr[s] = d
-                        nbr.pop(anchors[0], None) if anchors else None
-                        if len(anchors) > 1:
-                            nbr.pop(anchors[1], None)
-                        if nbr:
-                            for e in fused:
-                                d = nbr.get(e.get("source", ""))
-                                if d:
-                                    e["rerank_score"] = (
-                                        e.get("rerank_score") or 0.0) * (
-                                        1.05 if d == "cited-by" else 1.03)
-                            fused.sort(
-                                key=lambda x: -(x.get("rerank_score") or 0.0))
-                except Exception:
-                    pass
-
-            # Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk
-            # the RERANKED pool (fusion pool depth, ≥ limit) and keep at
-            # most CAP entries per source, taking the best chunks until the
-            # limit is filled. A survey-flavored query floods results with
-            # chunks of the same review; the cap trades redundant depth for
-            # breadth. Each source's FIRST (best-reranked) entry is always
-            # eligible, so a source's gold hit is never demoted — only its
-            # repeats yield. Backfill (skipped extras) only fires when the
-            # pool is exhausted below limit, preserving the count contract.
-            try:
-                cap = max(1, int(os.environ.get("RAG_SOURCE_CAP", "2")))
-                counts: Dict[str, int] = {}
-                kept, skipped = [], []
-                for e in fused:
-                    s = e.get("source", "")
-                    if len(kept) >= limit:
-                        break
-                    if counts.get(s, 0) >= cap:
-                        skipped.append(e)
-                    else:
-                        counts[s] = counts.get(s, 0) + 1
-                        kept.append(e)
-                if len(kept) < limit:
-                    kept.extend(skipped[:limit - len(kept)])
-                fused = kept
-            except Exception:
-                pass
+            # Shared post-fusion pipeline: rerank → cite-boost → source cap.
+            # (See _post_fusion — both the first pass and the broaden retry
+            # below go through it.)
+            fused = self._post_fusion(query, fused, limit)
 
             # Broadened retry on weak first-pass (zero-LLM, once).
             if os.environ.get("BROADEN_RETRY", "1") != "0":
@@ -381,9 +383,14 @@ class ToolFactory:
                                     # alt is no worse on the triggering signal
                                     # (same-or-better best similarity) → swap
                                     # so the [BROADENED] header still reaches
-                                    # the agent (it signals "first pass was
-                                    # weak, results widened"). Size tie-break
-                                    # remains the raw-count fallback.
+                                    # the agent. The alt pool ALSO goes
+                                    # through the full post-fusion pipeline
+                                    # (rerank → cite-boost → cap) — broaden
+                                    # used to bypass it, shipping raw fusion
+                                    # order for exactly the queries that
+                                    # were already weak.
+                                    alt_fused = self._post_fusion(
+                                        alt_query, alt_fused, limit)
                                     fused = alt_fused[:limit]
                                     return self._format_results(
                                         fused, broadened=True,
