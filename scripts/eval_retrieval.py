@@ -77,15 +77,33 @@ def main():
                 out = entries[:limit * 3]
         else:
             out = entries[:limit * 3]
-        # rerank narrows the fused pool to top_k — mirrors
-        # search_child_chunks (fused limit*3 → rerank → limit)
+        # rerank REORDERS the full fused pool (no cut — the cap below does
+        # the final cut); mirrors search_child_chunks
         if os.environ.get('RERANK', '1') != '0':
             try:
                 from reranker import rerank_results
-                return rerank_results(query, out, top_k=limit)
+                out = rerank_results(query, out)
             except Exception:
-                return out[:limit]
-        return out[:limit]
+                pass
+        # per-source diversity cap — mirrors search_child_chunks
+        try:
+            cap = max(1, int(os.environ.get('RAG_SOURCE_CAP', '2')))
+            counts, kept, skipped = {}, [], []
+            for e in out:
+                s = e.get('source', '')
+                if len(kept) >= limit:
+                    break
+                if counts.get(s, 0) >= cap:
+                    skipped.append(e)
+                else:
+                    counts[s] = counts.get(s, 0) + 1
+                    kept.append(e)
+            if len(kept) < limit:
+                kept.extend(skipped[:limit - len(kept)])
+            out = kept
+        except Exception:
+            pass
+        return out
 
     per_q, tiers = [], {}
     t0 = time.time()

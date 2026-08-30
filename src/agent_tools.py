@@ -238,15 +238,47 @@ class ToolFactory:
             # passage JOINTLY, catching terminology-misaligned matches
             # bi-encoders score poorly. Env kill-switch RERANK=0. Fails
             # soft: server down → fusion order stands.
+            # NOTE: rerank does NOT cut to limit here — the per-source cap
+            # below does the final cut, so rerank must hand it a pool deeper
+            # than limit (cutting first would let backfill restore the very
+            # duplicates the cap exists to remove).
             if os.environ.get("RERANK", "1") != "0":
                 try:
                     try:
                         from .reranker import rerank_results
                     except ImportError:  # src/ on sys.path directly (CLI/tests)
                         from reranker import rerank_results
-                    fused = rerank_results(query, fused, top_k=limit)
+                    fused = rerank_results(query, fused)
                 except Exception:
                     pass
+
+            # Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk
+            # the RERANKED pool (fusion pool depth, ≥ limit) and keep at
+            # most CAP entries per source, taking the best chunks until the
+            # limit is filled. A survey-flavored query floods results with
+            # chunks of the same review; the cap trades redundant depth for
+            # breadth. Each source's FIRST (best-reranked) entry is always
+            # eligible, so a source's gold hit is never demoted — only its
+            # repeats yield. Backfill (skipped extras) only fires when the
+            # pool is exhausted below limit, preserving the count contract.
+            try:
+                cap = max(1, int(os.environ.get("RAG_SOURCE_CAP", "2")))
+                counts: Dict[str, int] = {}
+                kept, skipped = [], []
+                for e in fused:
+                    s = e.get("source", "")
+                    if len(kept) >= limit:
+                        break
+                    if counts.get(s, 0) >= cap:
+                        skipped.append(e)
+                    else:
+                        counts[s] = counts.get(s, 0) + 1
+                        kept.append(e)
+                if len(kept) < limit:
+                    kept.extend(skipped[:limit - len(kept)])
+                fused = kept
+            except Exception:
+                pass
 
             # Broadened retry on weak first-pass (zero-LLM, once).
             if os.environ.get("BROADEN_RETRY", "1") != "0":
