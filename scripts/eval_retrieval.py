@@ -72,10 +72,20 @@ def main():
         entries = tf._vector_entries(res)
         if os.environ.get('HYBRID_SEARCH', '1') != '0':
             try:
-                return idx.search(query, entries, top_k=limit)
+                out = idx.search(query, entries, top_k=limit * 3)
             except Exception:
-                return entries[:limit]
-        return entries[:limit]
+                out = entries[:limit * 3]
+        else:
+            out = entries[:limit * 3]
+        # rerank narrows the fused pool to top_k — mirrors
+        # search_child_chunks (fused limit*3 → rerank → limit)
+        if os.environ.get('RERANK', '1') != '0':
+            try:
+                from reranker import rerank_results
+                return rerank_results(query, out, top_k=limit)
+            except Exception:
+                return out[:limit]
+        return out[:limit]
 
     per_q, tiers = [], {}
     t0 = time.time()

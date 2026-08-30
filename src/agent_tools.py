@@ -218,15 +218,35 @@ class ToolFactory:
 
             vector_entries = self._vector_entries(results)
 
-            # Hybrid fusion (BM25 + RRF) when enabled
+            # Hybrid fusion (BM25 + RRF) when enabled. The fused pool is
+            # limit*3: fusion ranks cheaply, the cross-encoder below does
+            # the precise ordering — rerank needs candidates to cut.
             if os.environ.get("HYBRID_SEARCH", "1") != "0":
                 try:
                     from .hybrid_search import HybridIndex
-                    fused = HybridIndex().search(query, vector_entries, top_k=limit)
+                    fused = HybridIndex().search(query, vector_entries,
+                                                 top_k=limit * 3)
                 except Exception:
                     fused = vector_entries  # BM25 unavailable → dense-only
             else:
                 fused = vector_entries
+
+            # Cross-encoder rerank (bge-reranker-v2-m3 via /v1/rerank).
+            # Post-fusion reordering: RRF is rank-only (score magnitude is
+            # thrown away by design), the cross-encoder reintroduces
+            # absolute (query, passage) relevance — it reads query and
+            # passage JOINTLY, catching terminology-misaligned matches
+            # bi-encoders score poorly. Env kill-switch RERANK=0. Fails
+            # soft: server down → fusion order stands.
+            if os.environ.get("RERANK", "1") != "0":
+                try:
+                    try:
+                        from .reranker import rerank_results
+                    except ImportError:  # src/ on sys.path directly (CLI/tests)
+                        from reranker import rerank_results
+                    fused = rerank_results(query, fused, top_k=limit)
+                except Exception:
+                    pass
 
             # Broadened retry on weak first-pass (zero-LLM, once).
             if os.environ.get("BROADEN_RETRY", "1") != "0":
