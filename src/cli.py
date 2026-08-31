@@ -81,7 +81,7 @@ COMMANDS = {
     "eval": "scripts/eval_retrieval.py",
     "fts": "scripts/build_fts_index.py",
     "bib": "src/bibtex_export.py",
-    "grill": "src/bib_rag_grill.py",
+    "grill": "src/bib_rag_writer.py",       # legacy alias → merged writer
     "writer": "src/bib_rag_writer.py",
 }
 

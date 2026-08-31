@@ -90,13 +90,13 @@ leaks across calls and silently writes into the wrong library).
 
 ```bash
 # Single paper (chunks parent+child, embeds via 8081, stores into the active library)
-eph-rag src/index_single_paper.py /path/to/paper.md
+<name>-rag src/index_single_paper.py /path/to/paper.md
 
 # First-time bulk build / rebuild (GPU build — incremental via checkpoint)
-eph-rag src/build_hierarchical_gpu.py --papers-dir /path/to/md/ --batch-size 50
+<name>-rag src/build_hierarchical_gpu.py --papers-dir /path/to/md/ --batch-size 50
 
 # Batch verification after indexing: check coverage
-eph-rag src/query_bib_rag.py "<distinctive phrase>" --top 3
+<name>-rag src/query_bib_rag.py "<distinctive phrase>" --top 3
 ```
 
 ## Adding papers
@@ -142,13 +142,13 @@ Full LangGraph-powered agentic pipeline with hierarchical retrieval, context com
 cd bib_rag
 
 # Single query (default: fast cloud model)
-/usr/bin/python3.10 -B agentic_query.py "What is the role of Eph receptors in neural development?"
+/usr/bin/python3.10 -B agentic_query.py "What is the role of retinoic acid in neural development?"
 
 # Interactive chat mode
 /usr/bin/python3.10 -B agentic_query.py --interactive
 
 # Verbose mode (shows pipeline progress)
-/usr/bin/python3.10 -B agentic_query.py "Compare EphA and EphB functions" --verbose
+/usr/bin/python3.10 -B agentic_query.py "Compare E-cadherin and N-cadherin functions" --verbose
 ```
 
 > **Note**: use `/usr/bin/python3.10` (the interpreter with langchain deps
@@ -264,9 +264,10 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   ├── agent_prompts.py · agent_schemas.py · agent_tools.py ← prompts / state / retrieval tools
 │   ├── build_hierarchical_gpu.py · index_single_paper.py · chunking.py ← index build
 │   ├── query_bib_rag.py        ← Quick semantic search & citations
-│   ├── bib_rag_grill.py        ← PARAGRAPH COMPOSER: grill→retrieve→synthesize (backends:
-│   │     default LLM · --no-llm template · --debate relational; ODT + citations)
-│   │     (bib_rag_writer.py · bib_rag_writer_debate.py = deprecated shims → grill)
+│   ├── bib_rag_writer.py       ← PARAGRAPH COMPOSER: grill→retrieve→synthesize (backends:
+│   │     default LLM · --no-llm template · --debate relational; markdown + citations;
+│   │     2026-08-31 merged from bib_rag_grill.py + writer/writer_debate shims;
+│   │     dependency policy: retrieval-metadata citations, no odfpy/zotero_access)
 │   ├── parent_store_manager.py ← Parent chunk loader
 │   └── evaluate.py · test_comprehensive.py · test_agentic_graph.py ← eval & tests
 │
