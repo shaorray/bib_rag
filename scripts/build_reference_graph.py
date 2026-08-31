@@ -41,6 +41,13 @@ def main():
     ap.add_argument("--icite-resolve-limit", type=int, default=0, metavar="N",
                     help="cap Phase-A PMID resolution calls (probe runs); "
                          "0 = unlimited")
+    ap.add_argument("--crossref", action="store_true",
+                    help="fetch Crossref reference lists (DOI domain, "
+                         "non-PubMed corpora) and build verified edges — "
+                         "merged with any iCite graph into "
+                         "data/citation_graph.json")
+    ap.add_argument("--crossref-limit", type=int, default=0, metavar="N",
+                    help="cap Crossref fetch calls (probe runs); 0 = unlimited")
     args = ap.parse_args(argv)
 
     cfg = get_config()
@@ -53,13 +60,20 @@ def main():
         if g is None:
             print("no reference graph built yet")
             return 1
-    elif args.icite:
-        from reference_graph import build_icite_graph
-        print("[refgraph] fetching PubMed/iCite verified edges "
-              "(resumable caches in data/)...")
-        build_icite_graph(progress=True, resolve_limit=args.icite_resolve_limit)
-        # the icite pipeline already rebuilt reference_graph.json (merged);
-        # fall through to stats below using the fresh graph
+    elif args.icite or args.crossref:
+        # both pipelines rebuild reference_graph.json at the end (merged);
+        # run icite first (fast PMID domain), then crossref (DOI domain)
+        if args.icite:
+            from reference_graph import build_icite_graph
+            print("[refgraph] fetching PubMed/iCite verified edges "
+                  "(resumable caches in data/)...")
+            build_icite_graph(progress=True,
+                              resolve_limit=args.icite_resolve_limit)
+        if args.crossref:
+            from reference_graph import build_crossref_graph
+            print("[refgraph] fetching Crossref reference lists "
+                  "(resumable cache data/crossref_references.json)...")
+            build_crossref_graph(progress=True, limit=args.crossref_limit)
         from reference_graph import load_graph
         g = load_graph()
     else:

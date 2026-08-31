@@ -88,8 +88,50 @@ def _icite_to_stem(source: str) -> str:
     """chroma source ("12351647.md") -> parent-store stem ("12351647_md").
 
     Mirrors chunking.save_parent_store: re.sub(r'[^\\w\\-]', '_', source)[:100].
+    FALLBACK ONLY — some libraries (geo_rag) predate the sanitizer or keep
+    original filenames with U+2010 hyphens / NFD accents; use
+    _parent_source_to_stem() for the exact map.
     """
     return re.sub(r"[^\w\-]", "_", source)[:100]
+
+
+def _parent_source_to_stem() -> Dict[str, str]:
+    """Exact {parent JSON 'source' field -> parent-store filename stem} map.
+
+    Built once per call (mtime-cached): reads each parent JSON's source
+    field — the authoritative chroma-space key — and maps it to the actual
+    filename stem, whatever unicode form that filename has. String
+    transforms fail here (geo filenames keep U+2010 hyphens and NFD
+    combining accents that re.sub would strip)."""
+    cfg = get_config()
+    store = cfg["parent_store_dir"]
+    if not os.path.isdir(store):
+        return {}
+    # cache on dir mtime (files added/removed -> rebuild; in-place edits of
+    # the same filename keep the same mapping)
+    try:
+        mtime = os.path.getmtime(store)
+    except OSError:
+        return {}
+    cache = getattr(_parent_source_to_stem, "_cache", None)
+    if cache and cache[0] == store and cache[1] == mtime:
+        return cache[2]
+    out: Dict[str, str] = {}
+    for fname in sorted(os.listdir(store)):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(store, fname)
+        try:
+            with open(path, encoding="utf-8") as f:
+                first = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(first, list) and first:
+            src = (first[0].get("source") or "").strip()
+            if src:
+                out[src] = fname[:-5]
+    _parent_source_to_stem._cache = (store, mtime, out)  # type: ignore[attr-defined]
+    return out
 
 
 def _merge_icite_edges(papers: Dict, edges: List[dict],
@@ -114,21 +156,33 @@ def _merge_icite_edges(papers: Dict, edges: List[dict],
     ic_edges = ic.get("edges") or []
     if not isinstance(ic_edges, list):
         return 0
+    # provenance label: the union graph (written by build_crossref_graph)
+    # mixes iCite + Crossref edges; the label must not claim PubMed for a
+    # Crossref DOI-domain edge
+    label = ("verified citation (Crossref/iCite)"
+             if "Crossref" in (ic.get("edge_def") or "")
+             else "iCite (PubMed verified)")
 
-    # key conversion: ".md" chroma space -> parent-store stem space
+    # key conversion: citation-graph keys (chroma source field values) ->
+    # parent-store stems. NOT a string transform: geo_rag filenames preserve
+    # U+2010 hyphens / NFD combining accents that sanitization would strip
+    # (18/1850 edges lost to that in the first full run). Build the exact
+    # map from the parent store itself: {json source field: filename stem}.
     known = set(papers)  # stems collected from the parent store scan
+    src2stem = _parent_source_to_stem()
     seen: Set[Tuple[str, str]] = set()
     injected = 0
     for e in ic_edges:
         if not (isinstance(e, (list, tuple)) and len(e) == 2):
             continue
-        citing, cited = _icite_to_stem(str(e[0])), _icite_to_stem(str(e[1]))
+        citing = src2stem.get(str(e[0])) or _icite_to_stem(str(e[0]))
+        cited = src2stem.get(str(e[1])) or _icite_to_stem(str(e[1]))
         if citing == cited or citing not in known or cited not in known:
             continue
         if (citing, cited) in seen:
             continue
         seen.add((citing, cited))
-        edges.append({"from": citing, "to": cited, "to_raw": "iCite",
+        edges.append({"from": citing, "to": cited, "to_raw": label,
                       "direction": "cites", "resolved": True})
         injected += 1
     if progress and injected:
@@ -427,6 +481,220 @@ def build_icite_graph(progress: bool = False,
     return graph
 
 
+# ---------------------------------------------------------------------------
+# Crossref (DOI domain) verified citation graph — generic fetch pipeline
+# (geo_rag path: non-PubMed corpora where iCite tops out; Crossref reference
+#  lists are publisher-deposited ground truth, DOI->DOI)
+# ---------------------------------------------------------------------------
+
+_CROSSREF_API = "https://api.crossref.org/works"
+_CROSSREF_THROTTLE = 1.2   # s between works calls (polite pool via mailto)
+
+
+def _clean_doi(raw: str) -> str:
+    """Normalize a library DOI: strip markdown-link tails, trailing parens.
+
+    Library meta DOIs carry pollution like
+    '10.1111/1751-7915.14482](https://doi.org/10.1111/1751-7915.14482)'
+    (251/1796 in geo_rag) — truncate at first whitespace/')'/']'."""
+    m = re.match(r"(10\.\d{4,9}/[^\s\)\]]+)", (raw or "").strip().lower())
+    return m.group(1) if m else ""
+
+
+def _crossref_get(url: str, retries: int = 3, timeout: int = 30,
+                  throttle: Optional[list] = None) -> Tuple[Optional[dict], str]:
+    """Throttled Crossref GET. Returns (parsed_json | None, status) where
+    status is 'ok' | '404' (permanent miss) | 'err' (transient)."""
+    import urllib.request
+    import urllib.error
+    _t = throttle if throttle is not None else [0.0]
+    for attempt in range(retries):
+        wait = _CROSSREF_THROTTLE - (time.time() - _t[0])
+        if wait > 0:
+            time.sleep(wait)
+        _t[0] = time.time()
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": _UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r), "ok"
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None, "404"      # permanent: not in Crossref
+            if attempt == retries - 1:
+                return None, "err"
+            time.sleep(2 * (attempt + 1))
+        except Exception:
+            if attempt == retries - 1:
+                return None, "err"
+            time.sleep(2 * (attempt + 1))
+    return None, "err"
+
+
+def build_crossref_graph(progress: bool = False,
+                         limit: int = 0) -> Optional[Dict]:
+    """Fetch Crossref reference lists for the ACTIVE library and build a
+    DOI-domain verified citation graph.
+
+    For every source with a clean DOI (>=10.<digits>/<suffix>, markdown
+    tails stripped), fetch /works/<doi> and scan its `reference` list —
+    each reference DOI that is ALSO a library DOI is a verified edge
+    (citing -> cited), publisher ground truth. Resumable cache at
+    data/crossref_references.json {doi: [ref doi, ...]} (404s recorded as
+    [] — permanent, not retried; transient failures recorded as null and
+    retried on the next run).
+
+    Edges from BOTH directions are derivable: the citing side's ref list
+    gives out-edges; a cited-by lookup needs no extra call (B appears in
+    A's refs <=> A cites B). Writes data/citation_graph.json merged with
+    any iCite graph (union of edge sets, dedup by (citing, cited) pair),
+    then rebuilds reference_graph.json.
+
+    limit>0 caps fetch calls (probe runs). Returns the written graph dict,
+    or None when the corpus has no clean DOIs.
+    """
+    cfg = get_config()
+    data_dir = cfg["data_dir"]
+    os.makedirs(data_dir, exist_ok=True)
+    ref_cache = os.path.join(data_dir, "crossref_references.json")
+    out_path = os.path.join(data_dir, "citation_graph.json")
+
+    # library DOI index (cleaned) + source keys
+    doi2src: Dict[str, str] = {}
+    src_meta: Dict[str, dict] = {}
+    for stem, parents, meta in _iter_parent_store():
+        src = (parents[0].get("source") or "").strip() or f"{stem}.md"
+        doi = _clean_doi(meta.get("doi") or "")
+        src_meta[src] = {"title": (meta.get("title") or "").strip(),
+                         "year": str(meta.get("year") or "").strip(),
+                         "journal": (meta.get("journal") or "").strip(),
+                         "doi": doi}
+        if doi:
+            doi2src[doi] = src
+    if progress:
+        print(f"[crossref] corpus: {len(src_meta)} sources, "
+              f"{len(doi2src)} with clean DOI")
+    if not doi2src:
+        return None
+
+    def _log(msg):
+        if progress:
+            print(f"[crossref] {msg}", flush=True)
+
+    # ---- Phase A: fetch reference lists (resumable) ----
+    refs_cache: Dict[str, Optional[list]] = {}
+    if os.path.exists(ref_cache):
+        try:
+            refs_cache = json.load(open(ref_cache, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            refs_cache = {}
+    todo = [d for d, v in refs_cache.items() if v is None] if refs_cache else []
+    unseen = [d for d in doi2src if d not in refs_cache]
+    todo = unseen + todo
+    if limit:
+        todo = todo[:limit]
+    _log(f"reference fetch todo: {len(todo)} (cached: {len(refs_cache) - len([v for v in refs_cache.values() if v is None])} ok, "
+         f"{len([v for v in refs_cache.values() if v is None])} failed-retry)")
+    throttle = [0.0]
+    fetched = 0
+    for i, doi in enumerate(todo, 1):
+        d, status = _crossref_get(f"{_CROSSREF_API}/{doi}", throttle=throttle)
+        if status != "ok":
+            # 404 = not registered with Crossref -> permanent miss []
+            # transient -> null, retried next run
+            refs_cache[doi] = [] if status == "404" else None
+        else:
+            refs = ((d or {}).get("message") or {}).get("reference") or []
+            refs_cache[doi] = [r["DOI"].lower() for r in refs if r.get("DOI")]
+        fetched += 1
+        if i % 50 == 0 or i == len(todo):
+            with open(ref_cache, "w", encoding="utf-8") as f:
+                json.dump(refs_cache, f)
+            _log(f"fetch {i}/{len(todo)} "
+                 f"(lib-relevant refs running: "
+                 f"{sum(1 for v in refs_cache.values() if v for x in v if x in doi2src)})")
+    with open(ref_cache, "w", encoding="utf-8") as f:
+        json.dump(refs_cache, f)
+    _log(f"Phase A done: ref lists for {sum(1 for v in refs_cache.values() if v is not None)}/{len(doi2src)} DOIs")
+
+    # ---- Phase B: edges = citing's refs ∩ library DOIs ----
+    edges = set()          # (citing_source, cited_source)
+    edges_doi = set()      # mirror (citing_doi, cited_doi)
+    for doi, refs in refs_cache.items():
+        if not refs:
+            continue
+        citer = doi2src.get(doi)
+        if not citer:
+            continue
+        for rd in refs:
+            tgt = doi2src.get(rd)
+            if tgt and tgt != citer:
+                edges.add((citer, tgt))
+                edges_doi.add((doi, rd))
+    _log(f"Phase B done: {len(edges)} verified edges "
+         f"({len(edges_doi)} DOI-pair mirror)")
+
+    # ---- Phase C: merge with existing citation_graph.json (iCite) ----
+    existing = {}
+    if os.path.exists(out_path):
+        try:
+            existing = json.load(open(out_path, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    icite_edges = set()
+    if existing.get("edges"):
+        for e in existing["edges"]:
+            if isinstance(e, (list, tuple)) and len(e) == 2:
+                icite_edges.add((str(e[0]), str(e[1])))
+    all_edges = icite_edges | edges
+    _log(f"Phase C: merged {len(icite_edges)} iCite + {len(edges)} Crossref "
+         f"-> {len(all_edges)} total (dedup by pair)")
+    in_deg, out_deg = {}, {}
+    for a, b in all_edges:
+        in_deg[b] = in_deg.get(b, 0) + 1
+        out_deg[a] = out_deg.get(a, 0) + 1
+    nodes = {}
+    for s, m in src_meta.items():
+        nodes[s] = {"doi": m["doi"], "title": m["title"][:90],
+                    "year": m["year"], "journal": m["journal"][:60],
+                    "in_corpus_cited_by": in_deg.get(s, 0),
+                    "in_corpus_cites": out_deg.get(s, 0)}
+    graph = {"generated": __import__("datetime").datetime.now().isoformat(
+                 timespec="seconds"),
+             "scope": "full corpus",
+             "key_def": "node key = chroma metadata.source (md filename) — "
+                        "direct join for retrieval results",
+             "n_nodes": len(nodes), "n_edges": len(all_edges),
+             "edge_def": "edges: [citing_source, cited_source]; union of "
+                         "iCite (PMID) + Crossref (DOI) verified edges; "
+                         "crossref_doi mirror in edges_doi",
+             "nodes": nodes,
+             "edges": sorted([list(e) for e in all_edges]),
+             "edges_doi": sorted([list(e) for e in edges_doi])}
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(graph, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, out_path)
+
+    # csv mirror
+    import csv as _csv
+    src2doi = {s: m["doi"] for s, m in src_meta.items()}
+    csv_path = os.path.join(data_dir, "citation_edges.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = _csv.writer(f)
+        w.writerow(["citing_source", "cited_source", "citing_doi",
+                    "cited_doi", "citing_title", "cited_title"])
+        for a, b in sorted(all_edges):
+            w.writerow([a, b, src2doi.get(a, ""), src2doi.get(b, ""),
+                        nodes.get(a, {}).get("title", "")[:70],
+                        nodes.get(b, {}).get("title", "")[:70]])
+    _log(f"csv mirror written: {csv_path}")
+
+    # rebuild reference_graph.json so _merge_icite_edges consumes the union
+    build_reference_graph(progress=progress)
+    return graph
+
+
 def _iter_parent_store():
     cfg = get_config()
     store = cfg["parent_store_dir"]
@@ -600,7 +868,7 @@ def neighbors(graph: Dict, source_or_title: str, limit: int = 30) -> Dict[str, D
             if e.get("resolved") and e.get("from") == src:
                 tgt = e.get("to")
                 if tgt and tgt != src and tgt not in out:
-                    out[tgt] = {"via": "iCite (PubMed verified)",
+                    out[tgt] = {"via": e.get("to_raw") or "verified citation",
                                 "direction": "cites"}
         year_index: Dict[str, List[str]] = {}
         for s, m in papers.items():
@@ -713,7 +981,7 @@ def snowball(graph: Dict, source_or_title: str,
                     matches.append({"source": hit,
                                     "title": by_source.get(hit, {}).get("title", ""),
                                     "year": by_source.get(hit, {}).get("year", ""),
-                                    "via": "iCite (PubMed verified)"})
+                                    "via": e.get("to_raw") or "verified citation"})
         # v2: pass 2 — heuristic author-year matching (existing logic)
         for e in graph["edges"]:
             if e.get("resolved") or e["from"] == src or \
@@ -747,7 +1015,7 @@ def snowball(graph: Dict, source_or_title: str,
             if e.get("resolved") and e.get("from") == src:
                 target = e.get("to")
                 matches.append({
-                    "raw_ref": "iCite (PubMed verified)",
+                    "raw_ref": e.get("to_raw") or "verified citation",
                     "resolved_source": target,
                     "resolved_title": by_source.get(target, {}).get("title", "") if target else "",
                     "in_library": target is not None,
