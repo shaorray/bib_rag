@@ -22,7 +22,15 @@ many libraries:
 # 0. Get the toolkit (if you haven't cloned it yet)
 git clone https://github.com/shaorray/bib_rag.git && cd bib_rag
 
-# 0b. Prerequisites
+# 0b. Optional (recommended): install as an editable package
+#     → gives you the `bibrag` console command from any directory.
+/usr/bin/python3.10 -m pip install -e . --user
+bibrag config                      # verify: prints active library
+bibrag query "some phrase" --top 3 # works without any wrapper
+#     The repo still works un-installed (loose-script mode) — installing
+#     changes nothing for existing eph-rag/geo-rag workflows.
+
+# 0c. Prerequisites
 #    a) Python dependencies (Python 3.10; see requirements.txt for details):
 pip install -r requirements.txt
 #    b) an OpenAI-compatible embedding server (bge-m3 recommended) — REQUIRED

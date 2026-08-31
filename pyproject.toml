@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bib_rag"
+version = "0.9.0"
+description = "Academic bibliography RAG toolkit: hierarchical ChromaDB retrieval, LangGraph agentic pipeline, citation guard, multi-library registry"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Rui Shao"}]
+requires-python = ">=3.10"
+# Mirrors requirements.txt (the tested env). Kept loose where the requirements
+# file is loose; pinned where it is pinned.
+dependencies = [
+    "chromadb==1.4.1",
+    "numpy>=1.24,<2",
+    "requests>=2.31",
+    "langgraph>=0.2,<2",
+    "langchain>=0.3,<2",
+    "langchain-core>=0.3,<2",
+    "langchain-community>=0.3,<2",
+    "langchain-openai>=0.2,<2",
+    "openai>=1.40",
+    "pydantic>=2,<3",
+    "pymupdf4llm>=0.0.17",
+]
+
+[project.optional-dependencies]
+# CPU-only SentenceTransformers embedding path (build_hierarchical);
+# the GPU path uses the llama-server embedding service on 8081 instead.
+cpu-embed = ["sentence-transformers>=2.2"]
+dev = ["pytest"]
+
+[project.scripts]
+bibrag = "bib_rag.cli:main"
+
+[tool.setuptools]
+# src/ ships AS the bib_rag package (no file moves; loose-script mode and
+# in-place kb_config patching by scripts/setup_library.py keep working).
+# Editable install recommended so registry patches apply immediately.
+packages = ["bib_rag"]
+
+[tool.setuptools.package-dir]
+bib_rag = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

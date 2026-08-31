@@ -11,7 +11,10 @@ from typing import List, Dict
 # Supports BIB_RAG_ROOT env var and --kb flag for switching knowledge bases.
 # Default: bib_rag (Eph-ephrin). Use --kb geo_rag for geology papers.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_config import get_config, parse_kb_arg, print_config
+try:  # bib_rag-package-try
+    from .kb_config import get_config, parse_kb_arg, print_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config, parse_kb_arg, print_config
 
 # Strip --kb from argv before legacy arg parsing
 _argv = parse_kb_arg()
@@ -38,7 +41,10 @@ def _load_parent_with_fallback(parent_id: str):
         return None
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from parent_store_manager import ParentStoreManager
+        try:  # bib_rag-package-try
+            from .parent_store_manager import ParentStoreManager
+        except ImportError:  # flat (loose-script mode)
+            from parent_store_manager import ParentStoreManager
     except Exception:
         return None
     for d in (PARENT_STORE_DIR_PRIMARY, PARENT_STORE_DIR_DISABLED):
@@ -75,7 +81,10 @@ def enrich_metadata_with_parent_fallback(results: List[Dict]) -> List[Dict]:
         # The JSON file on disk is named via _safe_filename(source) (strips
         # non-word chars), so we must use the same rule to check existence.
         try:
-            from parent_store_manager import ParentStoreManager as _PSM
+            try:  # bib_rag-package-try
+                from .parent_store_manager import ParentStoreManager as _PSM
+            except ImportError:  # flat (loose-script mode)
+                from parent_store_manager import ParentStoreManager as _PSM
             p_source = parent.get("source", "")
             if p_source:
                 # strip .md if present, then apply _safe_filename, then add .json
@@ -227,7 +236,10 @@ def export_bib(results: List[Dict], out_path: str, offline: bool = False) -> int
     yield one entry. Returns the number of entries written.
     """
     try:
-        from bibtex_export import export_answers_bib
+        try:  # bib_rag-package-try
+            from .bibtex_export import export_answers_bib
+        except ImportError:  # flat (loose-script mode)
+            from bibtex_export import export_answers_bib
     except ImportError:  # src/ on sys.path directly
         from src.bibtex_export import export_answers_bib
     sources: List[str] = []

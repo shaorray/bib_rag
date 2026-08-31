@@ -23,3 +23,8 @@ __pycache__/
 tmp/
 .temp/
 scripts/tmp_*.py
+# packaging build artifacts
+bib_rag.egg-info/
+src/bib_rag.egg-info/
+dist/
+build/

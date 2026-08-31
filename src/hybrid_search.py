@@ -44,8 +44,14 @@ try:
     from . import chunking
 except ImportError:  # direct script execution (scripts/build_fts_index.py)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from kb_config import get_config
-    import chunking
+    try:  # bib_rag-package-try
+        from .kb_config import get_config
+    except ImportError:  # flat (loose-script mode)
+        from kb_config import get_config
+    try:  # bib_rag-package-try
+        from .chunking import chunking
+    except ImportError:  # flat (loose-script mode)
+        import chunking
 
 # RRF constant (k=60 is the literature standard, used by DocsGPT/seerai).
 # Env-tunable for A/B ablation (eval harness sets env before import).

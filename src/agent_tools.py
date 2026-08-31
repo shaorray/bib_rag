@@ -19,8 +19,14 @@ from typing import List, Dict, Optional
 
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_config import get_config
-from parent_store_manager import ParentStoreManager
+try:  # bib_rag-package-try
+    from .kb_config import get_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config
+try:  # bib_rag-package-try
+    from .parent_store_manager import ParentStoreManager
+except ImportError:  # flat (loose-script mode)
+    from parent_store_manager import ParentStoreManager
 _CFG = get_config()
 CHROMA_DB_PATH = _CFG["chroma_path"]
 BIB_RAG_EMBED_URL = _CFG["embed_url"]
@@ -134,7 +140,10 @@ class ToolFactory:
                 try:
                     from .reranker import rerank_results
                 except ImportError:  # src/ on sys.path directly (CLI/tests)
-                    from reranker import rerank_results
+                    try:  # bib_rag-package-try
+                        from .reranker import rerank_results
+                    except ImportError:  # flat (loose-script mode)
+                        from reranker import rerank_results
                 fused = rerank_results(query, fused)
             except Exception:
                 pass
@@ -148,7 +157,10 @@ class ToolFactory:
                 try:
                     from .reference_graph import load_graph, neighbors
                 except ImportError:
-                    from reference_graph import load_graph, neighbors
+                    try:  # bib_rag-package-try
+                        from .reference_graph import load_graph, neighbors
+                    except ImportError:  # flat (loose-script mode)
+                        from reference_graph import load_graph, neighbors
                 g = load_graph()
                 if g:
                     anchors = [e.get("source", "") for e in fused[:2]]
@@ -327,9 +339,10 @@ class ToolFactory:
                                               plan_broadening, broaden_signature,
                                               or_split_query)
                     except ImportError:  # src/ on sys.path directly (CLI/tests)
-                        from broaden import (retrieval_metrics, should_broaden,
-                                             plan_broadening, broaden_signature,
-                                             or_split_query)
+                        try:  # bib_rag-package-try
+                            from .broaden import retrieval_metrics, should_broaden, plan_broadening, broaden_signature, or_split_query
+                        except ImportError:  # flat (loose-script mode)
+                            from broaden import retrieval_metrics, should_broaden, plan_broadening, broaden_signature, or_split_query
                     metrics = retrieval_metrics(vector_entries)
                     weak, reasons = should_broaden(metrics)
                     sig = broaden_signature(query, {"drop_where": True,
@@ -354,7 +367,10 @@ class ToolFactory:
                                         try:
                                             from .hybrid_search import HybridIndex
                                         except ImportError:
-                                            from hybrid_search import HybridIndex
+                                            try:  # bib_rag-package-try
+                                                from .hybrid_search import HybridIndex
+                                            except ImportError:  # flat (loose-script mode)
+                                                from hybrid_search import HybridIndex
                                         alt_fused = HybridIndex().search(
                                             alt_query, alt_entries,
                                             top_k=wide_limit)
@@ -476,7 +492,10 @@ class ToolFactory:
             try:
                 from .reference_graph import load_graph, snowball
             except ImportError:  # src/ on sys.path directly (CLI/tests)
-                from reference_graph import load_graph, snowball
+                try:  # bib_rag-package-try
+                    from .reference_graph import load_graph, snowball
+                except ImportError:  # flat (loose-script mode)
+                    from reference_graph import load_graph, snowball
             graph = load_graph()
             if graph is None:
                 return ("NO_REFERENCE_GRAPH: reference graph not built yet. "
@@ -515,7 +534,10 @@ class ToolFactory:
             try:
                 from .related_papers import find_related
             except ImportError:  # src/ on sys.path directly (CLI/tests)
-                from related_papers import find_related
+                try:  # bib_rag-package-try
+                    from .related_papers import find_related
+                except ImportError:  # flat (loose-script mode)
+                    from related_papers import find_related
             result = find_related(source, k=k)
             if result.get("error"):
                 return f"RELATED_ERROR: {result['error']}"

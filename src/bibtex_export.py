@@ -44,12 +44,18 @@ from typing import Dict, List, Optional, Tuple
 try:
     from .identifiers import normalize_doi
 except ImportError:  # src/ on sys.path directly (CLI/tests)
-    from identifiers import normalize_doi
+    try:  # bib_rag-package-try
+        from .identifiers import normalize_doi
+    except ImportError:  # flat (loose-script mode)
+        from identifiers import normalize_doi
 
 try:
     from .kb_config import get_config
 except ImportError:
-    from kb_config import get_config
+    try:  # bib_rag-package-try
+        from .kb_config import get_config
+    except ImportError:  # flat (loose-script mode)
+        from kb_config import get_config
 
 # ---------------------------------------------------------------------------
 # Tunables

@@ -46,8 +46,14 @@ from odf.text import P, H
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from kb_config import get_config
-import zotero_access  # noqa: E402  (MCP-first Zotero access; used by --no-llm citations + debate context)
+try:  # bib_rag-package-try
+    from .kb_config import get_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config
+try:  # bib_rag-package-try
+    from .zotero_access import zotero_access
+except ImportError:  # flat (loose-script mode)
+    import zotero_access
 
 # === Paths ===
 _CFG = get_config()

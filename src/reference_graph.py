@@ -57,12 +57,18 @@ try:
     from .kb_config import get_config
 except ImportError:  # direct script execution (scripts/build_reference_graph.py)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from kb_config import get_config
+    try:  # bib_rag-package-try
+        from .kb_config import get_config
+    except ImportError:  # flat (loose-script mode)
+        from kb_config import get_config
 
 try:
     from .identifiers import normalize_doi
 except ImportError:  # src/ on sys.path directly (CLI/tests)
-    from identifiers import normalize_doi
+    try:  # bib_rag-package-try
+        from .identifiers import normalize_doi
+    except ImportError:  # flat (loose-script mode)
+        from identifiers import normalize_doi
 
 # ---------------------------------------------------------------------------
 # Extraction regexes

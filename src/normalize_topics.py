@@ -43,8 +43,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/ (bib_utils)
-from kb_config import get_config  # noqa: E402
-from library_config import get_setting  # noqa: E402
+try:  # bib_rag-package-try
+    from .kb_config import get_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config
+try:  # bib_rag-package-try
+    from .library_config import get_setting
+except ImportError:  # flat (loose-script mode)
+    from library_config import get_setting
 
 _CFG = get_config()
 

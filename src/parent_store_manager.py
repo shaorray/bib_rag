@@ -12,7 +12,10 @@ from typing import List, Dict, Optional
 
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_config import get_config
+try:  # bib_rag-package-try
+    from .kb_config import get_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config
 _CFG = get_config()
 PARENT_STORE_DIR = _CFG["parent_store_dir"]
 

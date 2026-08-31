@@ -39,7 +39,10 @@ from typing import Dict, List, Optional, Set, Tuple
 try:
     from .kb_config import get_config
 except ImportError:  # src/ on sys.path directly (CLI/tests)
-    from kb_config import get_config
+    try:  # bib_rag-package-try
+        from .kb_config import get_config
+    except ImportError:  # flat (loose-script mode)
+        from kb_config import get_config
 
 # ---------------------------------------------------------------------------
 # Tunables (env-overridable, same pattern as agent_tools budgets)

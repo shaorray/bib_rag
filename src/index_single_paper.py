@@ -8,17 +8,17 @@ from pathlib import Path
 from langchain_community.vectorstores import Chroma
 
 # Shared chunking logic (single source of truth) — same dir as this script
-from chunking import (
-    atomic_json_dump,
-    clean_text, truncate_at_references, extract_meta,
-    extract_sections, split_into_paragraphs,
-    create_child_chunks, create_parent_chunks, save_parent_store,
-    CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE,
-)
+try:  # bib_rag-package-try
+    from .chunking import atomic_json_dump, clean_text, truncate_at_references, extract_meta, extract_sections, split_into_paragraphs, create_child_chunks, create_parent_chunks, save_parent_store, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE
+except ImportError:  # flat (loose-script mode)
+    from chunking import atomic_json_dump, clean_text, truncate_at_references, extract_meta, extract_sections, split_into_paragraphs, create_child_chunks, create_parent_chunks, save_parent_store, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE
 
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_config import get_config
+try:  # bib_rag-package-try
+    from .kb_config import get_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config
 _CFG = get_config()
 KB_ROOT = _CFG["kb_root"]
 CHROMA_DB_PATH = _CFG["chroma_path"]
@@ -175,7 +175,10 @@ def index_paper(md_path):
         try:
             from .hybrid_search import HybridIndex
         except ImportError:  # src/ on sys.path directly (CLI)
-            from hybrid_search import HybridIndex
+            try:  # bib_rag-package-try
+                from .hybrid_search import HybridIndex
+            except ImportError:  # flat (loose-script mode)
+                from hybrid_search import HybridIndex
         HybridIndex().upsert_source(md_path.name)
         print(f"  FTS (BM25) index updated for {md_path.name}")
     except Exception as e:

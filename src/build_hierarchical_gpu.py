@@ -24,13 +24,19 @@ from langchain_community.vectorstores import Chroma
 
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_config import get_config
+try:  # bib_rag-package-try
+    from .kb_config import get_config
+except ImportError:  # flat (loose-script mode)
+    from kb_config import get_config
 _CFG = get_config()
 
 # Optional temp-dir override (e.g. a larger scratch disk) via BIB_RAG_TMPDIR;
 # otherwise the system default applies.
 import tempfile
-from library_config import get_setting as _lib_setting
+try:  # bib_rag-package-try
+    from .library_config import get_setting as _lib_setting
+except ImportError:  # flat (loose-script mode)
+    from library_config import get_setting as _lib_setting
 _tmp_override = _lib_setting(_CFG["data_root"], "tmpdir")
 if _tmp_override and os.path.isdir(_tmp_override):
     tempfile.tempdir = _tmp_override
@@ -47,12 +53,10 @@ BIB_RAG_EMBED_URL = _CFG["embed_url"]
 # incremental index + index_single_paper) — single source of truth, so a full
 # rebuild and incremental adds always produce identical chunk structure.
 
-from chunking import (
-    clean_text, truncate_at_references, extract_meta, extract_sections,
-    split_into_paragraphs, create_child_chunks, create_parent_chunks,
-    save_parent_store,
-    CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE,
-)
+try:  # bib_rag-package-try
+    from .chunking import clean_text, truncate_at_references, extract_meta, extract_sections, split_into_paragraphs, create_child_chunks, create_parent_chunks, save_parent_store, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE
+except ImportError:  # flat (loose-script mode)
+    from chunking import clean_text, truncate_at_references, extract_meta, extract_sections, split_into_paragraphs, create_child_chunks, create_parent_chunks, save_parent_store, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, MIN_PARENT_SIZE
 
 # ============== Parent/Child Configuration ==============
 
@@ -335,7 +339,10 @@ def build_hierarchical_gpu(papers_dir, batch_size=50, rebuild=False):
                 stats['failed'] += len(all_children)
         
         # Save checkpoint (atomic — truncated checkpoint bricks resume)
-        from chunking import atomic_json_dump
+        try:  # bib_rag-package-try
+            from .chunking import atomic_json_dump
+        except ImportError:  # flat (loose-script mode)
+            from chunking import atomic_json_dump
         atomic_json_dump({'processed': list(checkpoint['processed']), 'last_batch': bn},
                          CHECKPOINT_FILE)
         

@@ -31,12 +31,18 @@ try:
     from .kb_config import get_config
 except ImportError:  # direct script execution
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from kb_config import get_config
+    try:  # bib_rag-package-try
+        from .kb_config import get_config
+    except ImportError:  # flat (loose-script mode)
+        from kb_config import get_config
 
 try:
     from .reference_graph import load_graph, _resolve_source, biblio_coupling
 except ImportError:
-    from reference_graph import load_graph, _resolve_source, biblio_coupling
+    try:  # bib_rag-package-try
+        from .reference_graph import load_graph, _resolve_source, biblio_coupling
+    except ImportError:  # flat (loose-script mode)
+        from reference_graph import load_graph, _resolve_source, biblio_coupling
 
 _CFG = get_config()
 
@@ -265,7 +271,10 @@ def _cites(graph, src, target) -> bool:
 
 
 def snowball_quiet(graph, source, limit=300):
-    from reference_graph import snowball
+    try:  # bib_rag-package-try
+        from .reference_graph import snowball
+    except ImportError:  # flat (loose-script mode)
+        from reference_graph import snowball
     r = snowball(graph, source, "forward", limit=limit)
     return r.get("matches", [])
 

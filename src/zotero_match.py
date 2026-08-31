@@ -93,7 +93,10 @@ def doi_match(query_doi: str, cand_doi: str) -> Optional[bool]:
     try:
         from .identifiers import normalize_doi, doi_prefix_agree
     except ImportError:  # src/ on sys.path directly (CLI/tests)
-        from identifiers import normalize_doi, doi_prefix_agree
+        try:  # bib_rag-package-try
+            from .identifiers import normalize_doi, doi_prefix_agree
+        except ImportError:  # flat (loose-script mode)
+            from identifiers import normalize_doi, doi_prefix_agree
     nq, nc = normalize_doi(query_doi), normalize_doi(cand_doi)
     if not nq or not nc:
         return None
@@ -136,8 +139,10 @@ def verify_zotero_hit_ids(query_title: str,
     PMCID) are exact-equality; DOI uses the two-tier prefix rule.
     """
     sim = title_similarity(query_title, hit.get("title", ""))
-    from identifiers import (normalize_pmid, normalize_pmcid,
-                             normalize_doi, doi_prefix_agree)
+    try:  # bib_rag-package-try
+        from .identifiers import normalize_pmid, normalize_pmcid, normalize_doi, doi_prefix_agree
+    except ImportError:  # flat (loose-script mode)
+        from identifiers import normalize_pmid, normalize_pmcid, normalize_doi, doi_prefix_agree
     for kind in ("pmid", "pmcid"):
         norm = normalize_pmid if kind == "pmid" else normalize_pmcid
         qv, hv = norm(query_ids.get(kind, "")), norm(hit.get(kind, ""))

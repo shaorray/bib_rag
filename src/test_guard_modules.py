@@ -990,7 +990,10 @@ def test_retraction_doctor_smoke(tmpdir):
             os.environ["RETRACTION_CHECK"] = "1"
         # force snapshot_path so the test never depends on the live snapshot
         sys.path.insert(0, os.path.join(repo, "src"))
-        import retraction_watch as rw  # bare module — the one doctor's import binds
+        try:  # bib_rag-package-try
+            from .retraction_watch import retraction_watch
+        except ImportError:  # flat (loose-script mode)
+            import retraction_watch
         orig = rw.snapshot_path
         try:
             rw.snapshot_path = lambda: os.path.join(str(tmpdir), "absent.csv")
