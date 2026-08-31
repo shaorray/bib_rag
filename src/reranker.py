@@ -39,6 +39,23 @@ RERANK_MODEL = os.environ.get('RERANK_MODEL', 'bge-reranker-v2-m3')
 RERANK_MAX_CHARS = int(os.environ.get('RERANK_MAX_CHARS', '1000'))
 RERANK_TIMEOUT = int(os.environ.get('RERANK_TIMEOUT', '30'))
 
+_WARNED = {"n": 0}
+
+def _warn_unavailable(detail: str) -> None:
+    """One stderr warning per process when the rerank service fails.
+
+    Reranking is an enhancement, never a dependency — but a persistent
+    outage (dead endpoint, wrong port) must not silently degrade every
+    query's ranking quality. First failure warns; the rest stay quiet.
+    """
+    if _WARNED["n"] >= 1:
+        return
+    _WARNED["n"] = 1
+    import sys
+    print(f"[reranker] UNAVAILABLE — serving fusion order instead "
+          f"({detail}); set RERANK_URL or start the service. "
+          f"(warning once per process)", file=sys.stderr)
+
 
 def rerank_available() -> bool:
     """Probe the rerank service (cheap; cached by the caller if needed)."""
@@ -82,8 +99,10 @@ def rerank_results(query: str, results: List[dict],
             reordered.append(e)
         return reordered[:top_k] if top_k else reordered
     except (urllib.error.URLError, KeyError, IndexError, ValueError,
-            TimeoutError, json.JSONDecodeError):
+            TimeoutError, json.JSONDecodeError) as e:
+        _warn_unavailable(f"{type(e).__name__}: {e}")
         return results[:top_k] if top_k else results
-    except Exception:
+    except Exception as e:
         # reranking is an enhancement, never a dependency
+        _warn_unavailable(f"{type(e).__name__}: {e}")
         return results[:top_k] if top_k else results

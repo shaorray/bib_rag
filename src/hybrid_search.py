@@ -748,3 +748,101 @@ def is_available() -> bool:
         return HybridIndex().indexed_sources() > 0
     except sqlite3.Error:
         return False
+
+# ─── Shared post-fusion pipeline (v3 stack) ────────────────────────────────
+# Extracted from agent_tools.ToolFactory._post_fusion (2026-08-31) so the
+# plain CLI path (query_bib_rag.search) serves the SAME rerank → citation
+# boost → source-cap pipeline as the agentic path. agent_tools._post_fusion
+# delegates here (the method + its call sites are kept — the T9 regression
+# test introspects them).
+#
+# Entry dicts need: text (rerank), source (cap/boost). All stages fail soft.
+
+def apply_post_fusion(query, fused, limit):
+    """Rerank → citation-graph boost → per-source diversity cap.
+
+    Same contract as ToolFactory._post_fusion (which delegates here):
+    each stage is env-switchable and fails soft; the cap does the final
+    cut to `limit` (rerank must NOT cut first — backfill would restore
+    the duplicates the cap removes).
+    """
+    # 1) Cross-encoder rerank (bge-reranker-v2-m3 via /v1/rerank)
+    if os.environ.get("RERANK", "1") != "0":
+        try:
+            try:
+                from .reranker import rerank_results
+            except ImportError:
+                from reranker import rerank_results
+            fused = rerank_results(query, fused)
+        except Exception:
+            warn_post_fusion("rerank stage skipped")
+
+    # 2) Citation-graph proximity boost: anchors = top-2 reranked sources;
+    #    1-hop citation neighbors get a gentle multiplicative nudge
+    #    (×1.05 cited-by / ×1.03 cites). Reranker scores are logits, so
+    #    the factors are deliberately small.
+    if os.environ.get("RAG_CITE_BOOST", "1") != "0":
+        try:
+            try:
+                from .reference_graph import load_graph, neighbors
+            except ImportError:
+                from reference_graph import load_graph, neighbors
+            g = load_graph()
+            if g:
+                anchors = [e.get("source", "") for e in fused[:2]]
+                nbr = {}
+                for a in anchors:
+                    for s, info in neighbors(g, a).items():
+                        d = (info or {}).get("direction", "")
+                        if s not in nbr or d == "cited-by":
+                            nbr[s] = d
+                for a in anchors:
+                    nbr.pop(a, None)
+                if nbr:
+                    for e in fused:
+                        d = nbr.get(e.get("source", ""))
+                        if d:
+                            e["rerank_score"] = (
+                                e.get("rerank_score") or 0.0) * (
+                                1.05 if d == "cited-by" else 1.03)
+                    fused.sort(key=lambda x: -(x.get("rerank_score") or 0.0))
+        except Exception:
+            warn_post_fusion("citation-boost stage skipped")
+
+    # 3) Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk the
+    #    reranked pool keeping at most CAP entries per source until limit
+    #    is filled; backfill from skipped extras only when the pool
+    #    exhausts below limit (count contract).
+    try:
+        cap = max(1, int(os.environ.get("RAG_SOURCE_CAP", "2")))
+        counts = {}
+        kept, skipped = [], []
+        for e in fused:
+            s = e.get("source", "")
+            if len(kept) >= limit:
+                break
+            if counts.get(s, 0) >= cap:
+                skipped.append(e)
+            else:
+                counts[s] = counts.get(s, 0) + 1
+                kept.append(e)
+        if len(kept) < limit:
+            kept.extend(skipped[:limit - len(kept)])
+        fused = kept
+    except Exception:
+        warn_post_fusion("source-cap stage skipped")
+    return fused
+
+
+_POST_FUSION_WARNED = set()
+
+def warn_post_fusion(msg: str) -> None:
+    """One warning per distinct stage failure per process (stderr).
+
+    Degradation stays silent on the happy path — but a persistent outage
+    (e.g. dead reranker endpoint) must not degrade quality invisibly.
+    """
+    if msg in _POST_FUSION_WARNED:
+        return
+    _POST_FUSION_WARNED.add(msg)
+    print(f"[post-fusion] {msg}", file=sys.stderr)

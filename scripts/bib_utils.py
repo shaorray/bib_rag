@@ -34,13 +34,23 @@ def normalize(s: str) -> str:
 
 
 def normalize_doi(d: str) -> str:
-    """Strip URL prefix / punctuation from a DOI. Returns '' for empty input."""
+    """Strip URL prefix / punctuation from a DOI. Returns '' for empty input.
+
+    Version-suffix rule matches src/identifiers.normalize_doi (canonical):
+    strip a trailing v<digits> ONLY when preceded by a digit (optionally via
+    a dot) — Oxford-style DOIs like 10.1093/nar/gkv370 legitimately end in
+    "v<digits>" and must survive. Without this rule, versioned DOIs
+    (...002v2) normalized here would never equality-match the canonical
+    form used everywhere in src/ (bind_zotero / bib_to_parent_store do
+    exactly that compare).
+    """
     if not d:
         return ""
     s = d.strip().lower()
     s = re.sub(r"^https?://(dx\.)?doi\.org/", "", s)
     s = re.sub(r"^doi:\s*", "", s)
     s = s.rstrip("/.,;)")
+    s = re.sub(r"(?<=\d)\.?v\d+$", "", s)
     return s
 
 

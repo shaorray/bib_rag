@@ -42,7 +42,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/ (bib_utils)
+# NOTE: the historical scripts/ path insert (for bib_utils) was removed —
+# this module imports nothing from scripts/ (verified: no bib_utils symbols).
 try:  # bib_rag-package-try
     from .kb_config import get_config
 except ImportError:  # flat (loose-script mode)

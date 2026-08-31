@@ -128,85 +128,25 @@ class ToolFactory:
         precision and the diversity cap (broaden used to bypass all three,
         shipping raw fusion order: found by the v3 regression test).
         Each stage fails soft (env kill-switch / exception → skip stage).
+
+        Implementation lives in hybrid_search.apply_post_fusion (2026-08-31)
+        so the plain CLI path (query_bib_rag.search) shares the identical
+        pipeline — this method stays as the seam the T9 regression test
+        introspects (self._post_fusion call sites must remain ≥ 2).
         """
-        # Cross-encoder rerank (bge-reranker-v2-m3 via /v1/rerank).
-        # RRF is rank-only; the cross-encoder reintroduces absolute
-        # (query, passage) relevance and catches terminology-misaligned
-        # matches bi-encoders score poorly. NOTE: rerank must NOT cut to
-        # limit here — the cap below does the final cut (cutting first
-        # would let backfill restore the very duplicates the cap removes).
-        if os.environ.get("RERANK", "1") != "0":
-            try:
-                try:
-                    from .reranker import rerank_results
-                except ImportError:  # src/ on sys.path directly (CLI/tests)
-                    try:  # bib_rag-package-try
-                        from .reranker import rerank_results
-                    except ImportError:  # flat (loose-script mode)
-                        from reranker import rerank_results
-                fused = rerank_results(query, fused)
-            except Exception:
-                pass
-
-        # Citation-graph proximity boost: anchors = top-2 reranked sources;
-        # pool entries that are 1-hop citation neighbors get a gentle
-        # multiplicative nudge (×1.05 cited-by / ×1.03 cites). Reranker
-        # scores are logits, so the factors are deliberately small.
-        if os.environ.get("RAG_CITE_BOOST", "1") != "0":
-            try:
-                try:
-                    from .reference_graph import load_graph, neighbors
-                except ImportError:
-                    try:  # bib_rag-package-try
-                        from .reference_graph import load_graph, neighbors
-                    except ImportError:  # flat (loose-script mode)
-                        from reference_graph import load_graph, neighbors
-                g = load_graph()
-                if g:
-                    anchors = [e.get("source", "") for e in fused[:2]]
-                    nbr: Dict[str, str] = {}
-                    for a in anchors:
-                        for s, info in neighbors(g, a).items():
-                            d = (info or {}).get("direction", "")
-                            if s not in nbr or d == "cited-by":
-                                nbr[s] = d
-                    for a in anchors:
-                        nbr.pop(a, None)
-                    if nbr:
-                        for e in fused:
-                            d = nbr.get(e.get("source", ""))
-                            if d:
-                                e["rerank_score"] = (
-                                    e.get("rerank_score") or 0.0) * (
-                                    1.05 if d == "cited-by" else 1.03)
-                        fused.sort(
-                            key=lambda x: -(x.get("rerank_score") or 0.0))
-            except Exception:
-                pass
-
-        # Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk the
-        # reranked pool keeping at most CAP entries per source until limit
-        # is filled; backfill from skipped extras only when the pool
-        # exhausts below limit (count contract).
         try:
-            cap = max(1, int(os.environ.get("RAG_SOURCE_CAP", "2")))
-            counts: Dict[str, int] = {}
-            kept, skipped = [], []
-            for e in fused:
-                s = e.get("source", "")
-                if len(kept) >= limit:
-                    break
-                if counts.get(s, 0) >= cap:
-                    skipped.append(e)
-                else:
-                    counts[s] = counts.get(s, 0) + 1
-                    kept.append(e)
-            if len(kept) < limit:
-                kept.extend(skipped[:limit - len(kept)])
-            fused = kept
-        except Exception:
-            pass
-        return fused
+            try:
+                from .hybrid_search import apply_post_fusion
+            except ImportError:  # src/ on sys.path directly (CLI/tests)
+                try:  # bib_rag-package-try
+                    from .hybrid_search import apply_post_fusion
+                except ImportError:  # flat (loose-script mode)
+                    from hybrid_search import apply_post_fusion
+            return apply_post_fusion(query, fused, limit)
+        except ImportError:
+            # hybrid_search unavailable (minimal env) — no post-fusion,
+            # fused order ships as-is
+            return fused
 
     def _format_results(self, fused: List[dict], broadened: bool = False,
                         broaden_reasons: Optional[List[str]] = None) -> str:

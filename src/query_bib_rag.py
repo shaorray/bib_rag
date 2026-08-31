@@ -117,9 +117,48 @@ def embed_query(text: str) -> List[float]:
 
 
 def search(query: str, top_k: int = 5) -> List[Dict]:
-    """Semantic search in ChromaDB."""
+    """Semantic search in ChromaDB.
+
+    Results go through the shared v3 post-fusion pipeline
+    (hybrid_search.apply_post_fusion: cross-encoder rerank → citation-graph
+    boost → per-source diversity cap) — the SAME pipeline as the agentic
+    path, so both entry points serve identical quality. Pipeline stages
+    fail soft; on any failure the raw similarity order ships.
+    """
     emb = embed_query(query)
-    return native_chroma_search(query, emb, top_k)
+    # Adapt CLI result shape → pipeline entry shape (needs text + source;
+    # cap stage does the final cut, so over-fetch for the pipeline to
+    # rerank a wider pool than the final top_k).
+    pool_size = max(top_k * 3, 12)
+    results = native_chroma_search(query, emb, pool_size)
+    entries = []
+    for r in results:
+        meta = r.get("metadata") or {}
+        entries.append({
+            "source": meta.get("source") or meta.get("title", "unknown"),
+            "section": meta.get("section", ""),
+            "text": r["text"],
+            "similarity": (1.0 / (1.0 + r["distance"])
+                           if r.get("distance") is not None else 0.0),
+            "_cli_ref": r,
+        })
+    try:
+        try:
+            from .hybrid_search import apply_post_fusion
+        except ImportError:
+            from hybrid_search import apply_post_fusion
+        entries = apply_post_fusion(query, entries, top_k)
+        # restore CLI shape, surfacing rerank_score when present
+        out = []
+        for e in entries:
+            r = e["_cli_ref"]
+            if e.get("rerank_score") is not None:
+                r = dict(r)
+                r["rerank_score"] = e["rerank_score"]
+            out.append(r)
+        return out
+    except Exception:
+        return results[:top_k]
 
 
 def native_chroma_search(query: str, embedding: List[float], top_k: int = 5):
@@ -172,6 +211,10 @@ def format_results(results: List[Dict], query: str):
         dist = r["distance"]
         # Convert distance to similarity score (L2 -> similarity)
         sim = 1.0 / (1.0 + dist) if dist is not None else 0
+        # Cross-encoder rerank score (post-fusion) when present — the
+        # finer-grained relevance signal
+        rr = r.get("rerank_score")
+        rel = rr if rr is not None else sim
         
         title = meta.get("title", "Unknown")[:60]
         year = meta.get("year", "N/A")
@@ -181,7 +224,8 @@ def format_results(results: List[Dict], query: str):
         note = meta.get("_note", "") or ""
         
         print(f"[{i}] 📄 {title}")
-        print(f"    Year: {year} | Section: {section} | Relevance: {sim:.3f}")
+        rel_tag = "rerank" if rr is not None else "sim"
+        print(f"    Year: {year} | Section: {section} | Relevance: {rel:.3f} ({rel_tag})")
         if art_key:
             print(f"    🔑 @article{{{art_key},")
         if doi:

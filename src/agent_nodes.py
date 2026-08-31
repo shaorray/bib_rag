@@ -308,8 +308,10 @@ def fallback_response(state: AgentState, llm):
             from .evidence_gate import evidence_coverage, gap_instruction, coverage_block
             coverage = evidence_coverage(state["messages"], state.get("retrieval_keys", set()))
             gate_note = gap_instruction(coverage)
-        except Exception:
+        except Exception as e:
             gate_note = ""  # gate must never break answering
+            from .hybrid_search import warn_post_fusion
+            warn_post_fusion(f"evidence-gate skipped ({type(e).__name__})")
 
     context_parts = []
     if context_summary:
@@ -537,8 +539,11 @@ def collect_answer(state: AgentState):
                     parts.append(f"{n_malformed} malformed token(s)")
                 note = f"[citation_guard] answer-side: removed " + " + flagged ".join(parts)
                 guard_note = f"{guard_note}; {note}" if guard_note else note
-        except Exception:
-            pass  # answer-side hygiene is best-effort; never break answering
+        except Exception as e:
+            # answer-side hygiene is best-effort; never break answering —
+            # but don't let a persistent integration failure be invisible
+            from .hybrid_search import warn_post_fusion
+            warn_post_fusion(f"answer-side hygiene skipped ({type(e).__name__})")
 
     # Citation-policy redirect (haiku.rag mechanism): an answer with zero
     # surviving Sources goes back to the orchestrator with feedback instead of
@@ -574,6 +579,11 @@ def collect_answer(state: AgentState):
         return {
             "final_answer": answer,
             "guard_note": note,
+            # LangGraph channels persist unless overwritten — the retry round
+            # set guard_redirect=True; this terminal path MUST clear it or
+            # route_after_collect would see the stale flag and route back to
+            # the orchestrator forever (same class as the :602 fix).
+            "guard_redirect": False,
             "agent_answers": [
                 {
                     "index": state["question_index"],
