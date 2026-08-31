@@ -21,13 +21,24 @@ lightweight citation graph WITHOUT re-running ingestion:
       2. in-text citations "(Author, 2020; Author2 & Author3, 2021)" across
          ALL parent content → author-year edges.
 
-Graph schema (v1, file-based; SQLite if it outgrows):
-  { "version": 1,
+Graph schema (v2, file-based; SQLite if it outgrows):
+  { "version": 2,
     "built_at": iso,
     "papers": { "<source>": {"title":…, "year":…, "doi":…} },
-    "edges":  [ {"from": source, "to_raw": "raw ref string",
+    "edges":  [ { "from": source, "to_raw": "raw ref string",
                  "to_author": "Parker", "to_year": "2021",
-                 "to_title_hint": "…", "direction": "cited-by|cites"} ] }
+                 "to_title_hint": "…", "direction": "cited-by|cites"},
+                # v2: PubMed/iCite-verified edges (exact, no heuristics)
+                { "from": citing_source, "to": cited_source,
+                 "to_raw": "iCite", "direction": "cites", "resolved": true} ] }
+
+v2 merge: when <data_root>/data/citation_graph.json exists (built by the
+icite pipeline: build_citation_graph*.py / rebuild_graph_from_cache.py,
+source-key space "12351647.md"), its [citing, cited] pairs are converted
+to parent-store stem keys and injected as RESOLVED edges. The heuristic
+extraction only covers author-year citation styles (60% of this corpus
+uses numbered "[1,2]" styles whose reference lists are truncated away at
+ingest) — the iCite edges are the ground-truth backstop.
 
 Snowballing tools then answer:
   - who cites X / who does X cite (within the library)
@@ -69,7 +80,59 @@ _INTEXT_RE = re.compile(
 _REF_ENTRY_RE = re.compile(
     r"([A-Z][A-Za-z'\-]+),?\s+[A-Z]\.?.{0,40}?\(((?:19|20)\d{2})[a-z]?\)\s*\.?\s*([^.]{15,180})\.")
 
-_GRAPH_VERSION = 1
+_GRAPH_VERSION = 2
+
+
+def _icite_to_stem(source: str) -> str:
+    """chroma source ("12351647.md") -> parent-store stem ("12351647_md").
+
+    Mirrors chunking.save_parent_store: re.sub(r'[^\\w\\-]', '_', source)[:100].
+    """
+    return re.sub(r"[^\w\-]", "_", source)[:100]
+
+
+def _merge_icite_edges(papers: Dict, edges: List[dict],
+                       progress: bool = False) -> int:
+    """Inject PubMed/iCite-verified citation edges as RESOLVED edges.
+
+    Source of truth: <data_root>/data/citation_graph.json — source-key space
+    ("12351647.md"), edges = [[citing, cited], ...]. That file is produced by
+    the icite pipeline (build_citation_graph_full.py → rebuild_graph_from_
+    cache.py) and is absent in libraries without PubMed corpora (geo_rag) —
+    merge is a silent no-op there.
+    """
+    cfg = get_config()
+    path = os.path.join(cfg["data_dir"], "citation_graph.json")
+    if not os.path.exists(path):
+        return 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            ic = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return 0
+    ic_edges = ic.get("edges") or []
+    if not isinstance(ic_edges, list):
+        return 0
+
+    # key conversion: ".md" chroma space -> parent-store stem space
+    known = set(papers)  # stems collected from the parent store scan
+    seen: Set[Tuple[str, str]] = set()
+    injected = 0
+    for e in ic_edges:
+        if not (isinstance(e, (list, tuple)) and len(e) == 2):
+            continue
+        citing, cited = _icite_to_stem(str(e[0])), _icite_to_stem(str(e[1]))
+        if citing == cited or citing not in known or cited not in known:
+            continue
+        if (citing, cited) in seen:
+            continue
+        seen.add((citing, cited))
+        edges.append({"from": citing, "to": cited, "to_raw": "iCite",
+                      "direction": "cites", "resolved": True})
+        injected += 1
+    if progress and injected:
+        print(f"  [refgraph] icite merge: {injected} resolved edges injected")
+    return injected
 
 
 def _iter_parent_store():
@@ -152,6 +215,13 @@ def build_reference_graph(out_path: Optional[str] = None,
         if progress and len(papers) % 200 == 0:
             print(f"  [refgraph] {len(papers)} papers, {len(edges)} edges")
 
+    icite_injected = _merge_icite_edges(papers, edges, progress=progress)
+    n_resolved = sum(1 for e in edges if e.get("resolved"))
+    if progress:
+        src = f"icite injected {icite_injected}, " if icite_injected else ""
+        print(f"[refgraph] {len(papers)} papers, {len(edges)} edges "
+              f"({src}heuristic {len(edges) - n_resolved}) → {out_path}")
+
     graph = {"version": _GRAPH_VERSION,
              "built_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
              "papers": papers,
@@ -161,8 +231,6 @@ def build_reference_graph(out_path: Optional[str] = None,
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(graph, f, ensure_ascii=False)
     os.replace(tmp, out_path)
-    if progress:
-        print(f"[refgraph] {len(papers)} papers, {len(edges)} edges → {out_path}")
     return graph
 
 
@@ -235,13 +303,20 @@ def neighbors(graph: Dict, source_or_title: str, limit: int = 30) -> Dict[str, D
 
         # backward: whom src cites — resolve (author, year) edges against
         # library first-author surnames + years.
+        # v2: resolved (iCite) edges first — exact targets, no heuristics
+        for e in graph["edges"]:
+            if e.get("resolved") and e.get("from") == src:
+                tgt = e.get("to")
+                if tgt and tgt != src and tgt not in out:
+                    out[tgt] = {"via": "iCite (PubMed verified)",
+                                "direction": "cites"}
         year_index: Dict[str, List[str]] = {}
         for s, m in papers.items():
             _, y = _surname_year(m)
             if y:
                 year_index.setdefault(y, []).append(s)
         for e in graph["edges"]:
-            if e.get("from") != src:
+            if e.get("resolved") or e.get("from") != src:
                 continue
             ta = (e.get("to_author") or "").lower()
             ta_base = re.split(r"\s+et\s+al\.?$|\s*&\s*|\s+and\s+", ta)[0]
@@ -338,8 +413,19 @@ def snowball(graph: Dict, source_or_title: str,
         q_surnames = {a.split()[0].split(",")[0].lower()
                       for a in (qmeta.get("authors", "") or "").split(";")
                       if a.strip()}
+        # v2: pass 1 — resolved (iCite-verified) edges, exact reverse lookup
         for e in graph["edges"]:
-            if e["from"] == src or (not e["to_author"] and not e.get("to_title_hint")):
+            if e.get("resolved") and e.get("to") == src:
+                hit = e["from"]
+                if hit != src:
+                    matches.append({"source": hit,
+                                    "title": by_source.get(hit, {}).get("title", ""),
+                                    "year": by_source.get(hit, {}).get("year", ""),
+                                    "via": "iCite (PubMed verified)"})
+        # v2: pass 2 — heuristic author-year matching (existing logic)
+        for e in graph["edges"]:
+            if e.get("resolved") or e["from"] == src or \
+                    (not e.get("to_author") and not e.get("to_title_hint")):
                 continue
             hit = None
             # strong: title hint overlaps target title
@@ -364,8 +450,19 @@ def snowball(graph: Dict, source_or_title: str,
                                 "year": by_source.get(hit, {}).get("year", ""),
                                 "via": e.get("to_title_hint", "") or f"{e['to_author']} ({e['to_year']})"})
     else:  # backward: papers `src` cites that ARE in the library
+        # v2: pass 1 — resolved (iCite-verified) edges: exact targets
         for e in graph["edges"]:
-            if e["from"] != src:
+            if e.get("resolved") and e.get("from") == src:
+                target = e.get("to")
+                matches.append({
+                    "raw_ref": "iCite (PubMed verified)",
+                    "resolved_source": target,
+                    "resolved_title": by_source.get(target, {}).get("title", "") if target else "",
+                    "in_library": target is not None,
+                })
+        # v2: pass 2 — heuristic reference resolution (existing logic)
+        for e in graph["edges"]:
+            if e.get("resolved") or e["from"] != src:
                 continue
             # try resolving the raw ref to a library paper
             target = None
@@ -404,25 +501,37 @@ def snowball(graph: Dict, source_or_title: str,
 
 def biblio_coupling(graph: Dict, source_or_title: str, limit: int = 8) -> List[dict]:
     """Papers sharing the most cited references with `src` (backward snowball
-    similarity). Rank by overlap of author-year citation sets."""
-    src = _resolve_source(graph, src_key := source_or_title)
+    similarity). Rank by overlap of cited-target sets.
+
+    v2: resolved (iCite-verified) edges contribute their exact target source
+    (strong signal); heuristic edges contribute (author, year) pairs. A single
+    pass over edges builds per-source cited sets (was O(P*E) full scans)."""
+    src = _resolve_source(graph, source_or_title)
     if src is None:
         return []
-    mine = {(e["to_author"], e["to_year"]) for e in graph["edges"] if e["from"] == src}
+    # one pass over edges: source -> set of cited-target keys
+    cited: Dict[str, set] = {}
+    for e in graph["edges"]:
+        f = e.get("from")
+        if not f:
+            continue
+        if e.get("resolved"):
+            key = ("src", e.get("to"))          # exact target (iCite)
+        else:
+            key = (e.get("to_author"), e.get("to_year"))
+        cited.setdefault(f, set()).add(key)
+    mine = cited.get(src) or set()
     if not mine:
         return []
     scored = []
-    for other in graph["papers"]:
-        if other == src:
-            continue
-        theirs = {(e["to_author"], e["to_year"]) for e in graph["edges"] if e["from"] == other}
-        if not theirs:
+    for other, theirs in cited.items():
+        if other == src or not theirs:
             continue
         j = len(mine & theirs) / len(mine | theirs)
         if j > 0:
             scored.append({"source": other,
-                           "title": graph["papers"][other].get("title", ""),
-                           "year": graph["papers"][other].get("year", ""),
+                           "title": graph["papers"].get(other, {}).get("title", ""),
+                           "year": graph["papers"].get(other, {}).get("year", ""),
                            "coupling": round(j, 3)})
     scored.sort(key=lambda d: -d["coupling"])
     return scored[:limit]
