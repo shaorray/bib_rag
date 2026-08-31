@@ -33,7 +33,8 @@ try:
 except ImportError:  # direct src/ on path
     from kb_config import get_config  # noqa: F811
 
-FIELDS = ("title", "authors", "year", "journal", "doi", "pmid", "pmcid")
+FIELDS = ("title", "authors", "year", "journal", "doi", "pmid", "pmcid",
+          "id_oa", "meta_provenance")
 
 
 def load_parent_meta(parent_dir: Path) -> dict:

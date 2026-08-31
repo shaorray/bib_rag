@@ -49,7 +49,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import sys
 
 import os
@@ -485,6 +485,9 @@ class CrossrefClient:
         self._last = 0.0
         self.calls = 0
         self.errors = 0
+        # batched-verify cache: normalized_doi -> record | None (None = a DOI
+        # the batch query answered as not-found; absent key = not prefetched)
+        self._doi_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     def _throttle(self):
         now = time.time()
@@ -509,7 +512,14 @@ class CrossrefClient:
             return None
 
     def verify_doi(self, doi: str) -> Optional[Dict[str, Any]]:
-        """Verify a DOI resolves. Returns {doi, title, year, journal, authors} or None."""
+        """Verify a DOI resolves. Returns {doi, title, year, journal, authors} or None.
+
+        Checks the batch-prefetch cache first (identity compare: a cached
+        None is a VERIFIED not-found, not a miss).
+        """
+        cached = self._doi_cache_lookup(doi)
+        if cached != "MISSING":
+            return cached    # type: ignore[return-value]
         nd = normalize_doi(doi)
         if not nd:
             return None
@@ -532,6 +542,86 @@ class CrossrefClient:
             "journal": journal,
             "authors": authors,
         }
+
+    # -- Batched DOI verification (borrowed from bibliometrix completeMetadata) --
+    # Crossref supports `filter=doi:10.a/x|doi:10.b/y` multi-DOI queries:
+    # one request verifies up to ~20 DOIs instead of 20 separate works/<doi>
+    # round-trips. A pre-fetch pass fills this cache before the audit loop;
+    # verify_doi() checks it first (a miss falls back to the single call).
+
+    def _record_to_item(self, m: Dict[str, Any], nd: str) -> Dict[str, Any]:
+        title = (m.get("title") or [""])[0]
+        year = (m.get("issued", {}).get("date-parts") or [[None]])[0][0]
+        journal = (m.get("container-title") or [""])[0]
+        authors = "; ".join(
+            f"{a.get('family','')},{a.get('given','')}"
+            for a in m.get("author", [])
+        )
+        return {
+            "doi": nd,
+            "title": title,
+            "year": str(year) if year else "",
+            "journal": journal,
+            "authors": authors,
+        }
+
+    def verify_doi_batch(self, dois: List[str],
+                         batch_size: int = 20) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Verify many DOIs in bulk via Crossref filter queries.
+
+        Returns {normalized_doi: record-or-None}. DOIs absent from the
+        response are recorded as None (genuine 404-equivalent — Crossref
+        filter queries silently skip unknown DOIs).
+        """
+        out: Dict[str, Optional[Dict[str, Any]]] = {}
+        nds = [normalize_doi(d) for d in dois]
+        nds = [d for d in nds if d and d not in out]
+        for i in range(0, len(nds), batch_size):
+            chunk = [d for d in nds[i:i + batch_size] if d not in out]
+            if not chunk:
+                continue
+            out.update({d: None for d in chunk})   # pessimistic default
+            # Crossref multi-value filters are COMMA-separated
+            # (`filter=doi:A,doi:B`) — pipes return 0 items.
+            filt = ",".join(f"doi:{d}" for d in chunk)
+            url = ("https://api.crossref.org/works?filter="
+                   + urllib.parse.quote(filt, safe=":,")
+                   + f"&rows={len(chunk)}&mailto={self.mailto}")
+            d = self._get(url)
+            if not d or d.get("status") != "ok":
+                # request failed: these DOIs stay UNKNOWN, not verified-absent
+                # — a transient failure must not poison the cache into a
+                # permanent 404 (verify_doi consults the cache and would
+                # never retry)
+                for x in chunk:
+                    out.pop(x, None)
+                continue
+            for it in d.get("message", {}).get("items", []):
+                nd = normalize_doi(it.get("DOI", "") or "")
+                if nd in out:
+                    out[nd] = self._record_to_item(it, nd)
+        return out
+
+    def prefetch_doi_cache(self, dois: List[str], batch_size: int = 20) -> int:
+        """Bulk-verify DOIs into the internal cache. Returns cached hits."""
+        if not self.enabled or not dois:
+            return 0
+        batch = self.verify_doi_batch(dois, batch_size=batch_size)
+        hits = 0
+        for nd, rec in batch.items():
+            self._doi_cache[nd] = rec
+            if rec:
+                hits += 1
+        return hits
+
+    def _doi_cache_lookup(
+            self, doi: str) -> Optional[Union[Dict[str, Any], None, str]]:
+        """Cache lookup sentinel: 'MISSING' (not prefetched) vs None (verified
+        404) vs record. Callers compare with identity, not truthiness."""
+        nd = normalize_doi(doi)
+        if not nd or nd not in self._doi_cache:
+            return "MISSING"
+        return self._doi_cache[nd]
 
     def search(self, title: str, author_lastname: str = "",
                year: str = "") -> List[Dict[str, Any]]:
@@ -707,6 +797,12 @@ class OpenAlexClient:
         d = self._get(url)
         if not d:
             return None
+        return self._work_to_record(d, nd)
+
+    def _work_to_record(self, d: dict, nd: str = "") -> Optional[Dict[str, Any]]:
+        """Map an OpenAlex work JSON to the shared record shape (+id_oa)."""
+        if not d:
+            return None
         title = d.get("title", "") or d.get("display_name", "") or ""
         year = d.get("publication_year", "")
         venue = (d.get("primary_location") or {}).get("source", {}) or {}
@@ -717,13 +813,31 @@ class OpenAlexClient:
             name = au.get("display_name", "")
             if name:
                 authors.append(name)
+        # OpenAlex Work ID (e.g. "https://openalex.org/W2741809807" → "W2741809807"):
+        # cached into meta so later audits can key by id_oa when the DOI is
+        # missing/malformed (bibliometrix completeMetadata's id_oa pattern).
+        id_oa = str(d.get("id", "") or "").replace("https://openalex.org/", "")
         return {
-            "doi": nd,
+            "doi": nd or (d.get("doi", "") or "").replace("https://doi.org/", ""),
             "title": title,
             "year": str(year) if year else "",
             "journal": journal,
             "authors": "; ".join(authors),
+            "id_oa": id_oa,
         }
+
+    def verify_id_oa(self, id_oa: str) -> Optional[Dict[str, Any]]:
+        """Fetch a work by its OpenAlex Work ID (`W2741809807`).
+
+        The second lookup key when the DOI is missing or malformed —
+        figshare/truncated DOIs that 404 on Crossref usually still resolve
+        here. Returns the shared record shape (with id_oa)."""
+        wid = str(id_oa or "").strip().replace("https://openalex.org/", "")
+        if not wid or not wid.upper().startswith("W") or not wid[1:].isdigit():
+            return None
+        url = f"https://api.openalex.org/works/{urllib.parse.quote(wid)}"
+        d = self._get(url)
+        return self._work_to_record(d) if d else None
 
     def search(self, title: str) -> List[Dict[str, Any]]:
         if not self.enabled or not title:
@@ -734,20 +848,10 @@ class OpenAlexClient:
             return []
         out = []
         for it in d.get("results", []):
-            t = it.get("title", "") or it.get("display_name", "") or ""
-            y = it.get("publication_year", "")
-            venue = (it.get("primary_location") or {}).get("source", {}) or {}
-            j = venue.get("display_name", "")
-            dois = it.get("doi", "") or ""
-            if dois:
-                dois = dois.replace("https://doi.org/", "")
-            out.append({
-                "doi": dois,
-                "title": t,
-                "year": str(y) if y else "",
-                "journal": j,
-                "authors": "",
-            })
+            rec = self._work_to_record(it)
+            if rec is None:
+                continue
+            out.append(rec)
         return out
 
 
@@ -888,6 +992,7 @@ class Auditor:
             "pmid": meta.get("pmid", ""),
             "pmcid": meta.get("pmcid", ""),
             "key": meta.get("key", ""),
+            "id_oa": str(meta.get("id_oa", "") or ""),
         }
 
         # ---- Step 0: local identity + authors-quality assessment ----
@@ -1017,6 +1122,16 @@ class Auditor:
                     doi_field_check = "resolves_oa" if openalex_resp else "not_found"
                 else:
                     doi_field_check = "unverified"
+        if (doi_field_check == "not_found" and not crossref_resp
+                and not openalex_resp and self.openalex.enabled
+                and claimed.get("id_oa")):
+            # Second key (bibliometrix id_oa pattern): the DOI is missing/
+            # malformed but an OpenAlex Work ID was cached in a previous run —
+            # figshare/truncated DOIs usually still resolve by Work ID.
+            oa_id_resp = self.openalex.verify_id_oa(claimed["id_oa"])
+            if oa_id_resp:
+                openalex_resp = oa_id_resp
+                doi_field_check = "resolves_oa"
         # ---- Title + year checks against Crossref (if DOI resolved) ----
         title_field_check = "no_ref"
         year_field_check = "no_ref"
@@ -1133,6 +1248,7 @@ class Auditor:
         suggested_fix = None
         confidence = "none"
         sources_agreeing = 0
+        openalex_only = False
         evidence: Dict[str, Any] = {"crossref": crossref_resp, "openalex": openalex_resp}
         fix: Optional[Dict[str, str]] = None
 
@@ -1165,6 +1281,7 @@ class Auditor:
                 suggested_fix = fix
                 confidence = conf
                 sources_agreeing = n
+                openalex_only = bool(fix.pop("_openalex_only", False)) if fix else False
             if fix and ident["identity_mismatch"] and not gold:
                 # the mismatch itself is the defect being fixed — a fix that
                 # agrees with the filename oracle RESOLVES the identity flag
@@ -1178,6 +1295,7 @@ class Auditor:
             "needs_reindex": ident["content_swap"],
             "pmid_gold": bool(pmid_gold),
             "doi_gold": bool(doi_gold),
+            "openalex_only": openalex_only,
             "claimed_meta": claimed,
             "clean_title": clean_title,
             "evidence": evidence,
@@ -1388,7 +1506,38 @@ class Auditor:
             cand.setdefault("year", openalex_resp["year"])
             cand.setdefault("journal", openalex_resp["journal"])
             cand.setdefault("authors", openalex_resp["authors"])
+            if openalex_resp.get("id_oa"):
+                cand.setdefault("id_oa", openalex_resp["id_oa"])
             source_dois["openalex_verify"] = nd
+
+        # --- Source 6: OpenAlex title search (fallback channel) ---
+        # Borrowed from bibliometrix completeMetadata's OpenAlex pass: when
+        # Crossref AND PubMed came up empty (or their candidates were
+        # oracle-rejected later), OpenAlex's search often still finds the
+        # record — different index, different coverage (it also carries the
+        # Work ID, so the fix payload gains an id_oa for future audits).
+        if self.openalex.enabled and clean_title and not candidates:
+            for r in self.openalex.search(clean_title):
+                if not r.get("title"):
+                    continue
+                sim = _title_search_sim(clean_title, r["title"])
+                year_ok = True
+                try:
+                    if claimed.get("year") and r.get("year"):
+                        year_ok = abs(int(claimed["year"]) - int(r["year"])) <= YEAR_TOLERANCE_SEARCH
+                except (TypeError, ValueError):
+                    pass
+                if sim >= TITLE_JACCARD_MATCH and year_ok:
+                    nd = normalize_doi(r.get("doi", "")) or f"oa:{r.get('id_oa', '')}"
+                    cand = candidates.setdefault(nd, {"doi": r.get("doi", "")})
+                    cand.setdefault("title", r["title"])
+                    cand.setdefault("year", r.get("year", ""))
+                    cand.setdefault("journal", r.get("journal", ""))
+                    cand.setdefault("authors", r.get("authors", ""))
+                    if r.get("id_oa"):
+                        cand.setdefault("id_oa", r["id_oa"])
+                    source_dois["openalex_search"] = nd
+                    break
 
         # --- Merge + confidence scoring ---
         if not candidates:
@@ -1418,7 +1567,7 @@ class Auditor:
             "crossref_verify": "crossref", "crossref_search": "crossref",
             "pubmed": "pubmed", "pubmed_pmid": "pubmed",
             "zotero": "zotero", "zotero_key": "zotero",
-            "openalex_verify": "openalex",
+            "openalex_verify": "openalex", "openalex_search": "openalex",
         }
         family_dois: Dict[str, set] = defaultdict(set)
         for src, nd in source_dois.items():
@@ -1447,6 +1596,7 @@ class Auditor:
             "pmid": fix.get("pmid", ""),
             "pmcid": fix.get("pmcid", ""),
             "key": fix.get("key", ""),
+            "id_oa": fix.get("id_oa", ""),
         }
         # Confidence: HIGH if ≥2 sources agree on DOI; MEDIUM if 1 (DOI verified);
         # LOW only for pure-search matches with title disagreement.
@@ -1479,6 +1629,14 @@ class Auditor:
                 confidence = "medium"
         else:
             confidence = "low"
+
+        # Provenance marker (consumed by _provenance_source via the audit
+        # result): the fix's every DOI-bearing source is an OpenAlex family
+        # source — i.e. the Source-6 fallback channel produced this fix
+        # alone. Popped in audit_file; never written to meta.
+        if source_dois and all(
+                SOURCE_FAMILY.get(k, k) == "openalex" for k in source_dois):
+            out["_openalex_only"] = True
 
         return out, confidence, n_agree
 
@@ -1666,12 +1824,29 @@ class Reporter:
 # Apply — write fixes back to parent_store (with backup)
 # ---------------------------------------------------------------------------
 
+def _provenance_source(r: Dict[str, Any]) -> str:
+    """Which source produced this fix (for meta_provenance, bibliometrix's
+    $ENRICH pattern: 'field:source; field:source' shown per record)."""
+    if r.get("pmid_gold"):
+        return "pubmed_pmid_gold"
+    if r.get("doi_gold"):
+        return "crossref_doi_gold"
+    if r.get("openalex_only"):
+        return "openalex"
+    return "registry"
+
+
 def apply_fixes(results: List[Dict[str, Any]], parent_dir: Path,
                 backup_dir: Path, min_confidence: str = "medium") -> Dict[str, int]:
     """Write suggested_fix back to parent_store/*.json (with backup).
 
     Only applies fixes with confidence >= min_confidence.
     Returns {applied, skipped, errors}.
+
+    Provenance (borrowed from bibliometrix completeMetadata): every applied
+    fix stamps `meta_provenance` — a compact 'field:source; …' string listing
+    which registry supplied each biblio field, so any later reader can tell
+    human-entered data from enriched data and audits can age fixes.
     """
     conf_rank = {"high": 3, "medium": 2, "low": 1, "none": 0}
     min_rank = conf_rank.get(min_confidence, 2)
@@ -1695,8 +1870,13 @@ def apply_fixes(results: List[Dict[str, Any]], parent_dir: Path,
             if not isinstance(data, list):
                 skipped += 1
                 continue
-            # Update meta in every chunk (all chunks share meta — update all for safety)
+            # Which fields will this fix actually change? (provenance tracks
+            # what THIS run supplied, mirroring bibliometrix's fill-only
+            # semantics: only vacant cells count as filled)
             identity_fix = bool(r.get("identity_flags"))
+            src = _provenance_source(r)
+            changed_fields: set = set()
+            # Update meta in every chunk (all chunks share meta — update all for safety)
             for sec in data:
                 meta = sec.setdefault("meta", {})
                 if identity_fix:
@@ -1707,25 +1887,36 @@ def apply_fixes(results: List[Dict[str, Any]], parent_dir: Path,
                         meta[k] = fix.get(k, "")
                     if fix.get("key"):
                         meta["key"] = fix["key"]
+                    if fix.get("id_oa"):
+                        meta["id_oa"] = fix["id_oa"]
+                    changed_fields.update(
+                        k for k in ("doi", "title", "authors", "year",
+                                    "journal", "pmid", "pmcid")
+                        if k in fix and fix.get(k))   # empty clears ≠ supplied
                     continue
-                if fix.get("doi"):
-                    meta["doi"] = fix["doi"]
-                if fix.get("title"):
-                    meta["title"] = fix["title"]
-                if fix.get("authors"):
-                    meta["authors"] = fix["authors"]
-                if fix.get("year"):
-                    meta["year"] = fix["year"]
-                if fix.get("journal"):
-                    meta["journal"] = fix["journal"]
-                if fix.get("pmid"):
-                    meta["pmid"] = fix["pmid"]
-                if fix.get("pmcid"):
-                    meta["pmcid"] = fix["pmcid"]
+                for k in ("doi", "title", "authors", "year", "journal",
+                          "pmid", "pmcid", "id_oa"):
+                    if fix.get(k):
+                        if str(meta.get(k, "")) != str(fix[k]):
+                            changed_fields.add(k)
+                        meta[k] = fix[k]
                 if fix.get("key"):
                     meta["key"] = fix["key"]
-            fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            applied += 1
+            if changed_fields:
+                prov = "; ".join(f"{k}:{src}" for k in
+                                 ("doi", "title", "authors", "year", "journal",
+                                  "pmid", "pmcid", "id_oa")
+                                 if k in changed_fields and k in fix)
+                stamp = f"{prov} @{DATE_TAG}"
+                for sec in data:
+                    sec.setdefault("meta", {})["meta_provenance"] = stamp
+                fp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                              encoding="utf-8")
+                applied += 1
+            else:
+                # fix proposed nothing new (all target cells already equal or
+                # empty-vs-empty) — applying would be a no-op write
+                skipped += 1
         except Exception as ex:
             log.warning("apply failed for %s: %s", r["file"], ex)
             errors += 1
@@ -1856,6 +2047,33 @@ def main():
 
     log.info("auditing %d files (mode=%s)...", len(files),
              "apply" if args.apply else "dry-run")
+
+    # -- Batched DOI pre-fetch (borrowed from bibliometrix completeMetadata) --
+    # One filter query verifies ~20 claimed DOIs at once, so the per-file
+    # verify_doi() in the audit loop usually hits the cache instead of making
+    # a network round-trip. Includes DOI-shaped filename candidates (gold
+    # oracles) — they would otherwise verify one-by-one inside audit_file.
+    if crossref.enabled and files:
+        t_pf = time.time()
+        prefetch: List[str] = []
+        for fp in files:
+            try:
+                _d = json.loads(fp.read_text(encoding="utf-8"))
+                _m = (_d[0].get("meta", {}) or {}) if _d else {}
+                _doi = str(_m.get("doi", "") or "")
+                if _doi and not is_fake_doi(_doi):
+                    prefetch.append(_doi)
+            except Exception:
+                pass
+            # DOI-shaped filename gold-oracle candidates join the batch even
+            # when the JSON read failed (the decode needs no file content).
+            for cand in _doi_from_filename(fp.name):
+                prefetch.append(cand)
+        uniq = len(set(normalize_doi(d) for d in prefetch if normalize_doi(d)))
+        if uniq:
+            hits = crossref.prefetch_doi_cache(prefetch)
+            log.info("crossref prefetch: %d/%d DOIs verified in %.1fs (batched)",
+                     hits, uniq, time.time() - t_pf)
 
     results: List[Dict[str, Any]] = []
     t0 = time.time()

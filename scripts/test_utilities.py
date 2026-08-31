@@ -344,7 +344,6 @@ class TestMetaAuditHelpers(unittest.TestCase):
             self.assertEqual(stats2["skipped"], 1)
             self.assertEqual(json.loads(fp.read_text(encoding="utf-8"))[0]["meta"]["doi"], "10.1/x")
 
-
 # ---------------------------------------------------------------------------
 # meta_audit blind-spot fix — authors quality / filename identity / oracle
 # (regression tests for the 2026-08-29 fix; pure, no network)
