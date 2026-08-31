@@ -255,7 +255,6 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   ├── bib_utils.py            ← Shared normalization / .bib / filename helpers
 │   ├── zotero_access.py        ← Zotero access layer (MCP first, HTTP fallback)
 │   ├── remove_paper.py · setup_library.py ← library lifecycle
-│   └── test_utilities.py       ← Regression tests (no network)
 │   └── archive_project_specific/ ← superseded one-off corpus scripts (provenance only)
 │
 ├── src/                        ← RAG library & query/writer tools
@@ -269,7 +268,9 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   │     2026-08-31 merged from bib_rag_grill.py + writer/writer_debate shims;
 │   │     dependency policy: retrieval-metadata citations, no odfpy/zotero_access)
 │   ├── parent_store_manager.py ← Parent chunk loader
-│   └── evaluate.py · test_comprehensive.py · test_agentic_graph.py ← eval & tests
+│   └── evaluate.py                       ← eval harness (tests live in tests/)
+├── tests/                     ← ALL regression suites (moved 2026-08-31 from src/+scripts/:
+│     unit (bib_utils/meta_audit/doctor/guard) + LLM-integration (comprehensive/agentic)
 │
 ├── docs/                       ← README.md (index) + archive/ (historical 2026-03→06, obsolete systems)
 │
@@ -320,10 +321,10 @@ embeddings **8081**, LLM **11434** (cloud) or **5015** (local).
 ```bash
 # Comprehensive test suite (5 queries, ~5 minutes)
 cd bib_rag
-/usr/bin/python3.10 -B src/test_comprehensive.py
+/usr/bin/python3.10 -B tests/test_comprehensive.py
 
 # Single test query
-/usr/bin/python3.10 -B src/test_agentic_graph.py
+/usr/bin/python3.10 -B tests/test_agentic_graph.py
 
 # Evaluation: agentic vs baseline
 /usr/bin/python3.10 -B src/evaluate.py
