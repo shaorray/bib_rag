@@ -29,13 +29,15 @@ def route_after_rewrite(state: State) -> list:
         return "request_clarification"
     else:
         # HyDE passage rides to EVERY subgraph (one passage covers the
-        # topic; each sub-question probes it from its own angle).
+        # topic; each sub-question probes it from its own angle). Key is
+        # "hyde" on the SUBGRAPH (must not collide with the parent State's
+        # hydePassage channel — see AgentState).
         hyde = state.get("hydePassage", "") or ""
         return [
             Send(
                 "agent",
                 {"question": query, "question_index": idx, "messages": [],
-                 "hydePassage": hyde},
+                 "hyde": hyde},
             )
             for idx, query in enumerate(state["rewrittenQuestions"])
         ]

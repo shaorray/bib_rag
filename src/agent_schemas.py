@@ -98,7 +98,10 @@ class AgentState(MessagesState):
     # State.hydePassage via the Send fan-out); consumed by the mandatory
     # first search — appended to the query text so ONE embedding round
     # covers question + answer-shaped passage.
-    hydePassage: str = ""
+    # Named "hyde" (NOT hydePassage): the key must NOT collide with the
+    # parent State's channel — parallel subgraphs writing back to a shared
+    # LastValue channel raise InvalidUpdateError on fan-out.
+    hyde: str = ""
     retrieval_keys: Annotated[Set[str], set_union] = set()
     final_answer: str = ""
     # Deterministic citation-guard note from collect_answer (empty when the
