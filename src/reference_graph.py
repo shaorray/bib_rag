@@ -50,6 +50,7 @@ import os
 import re
 import sys
 import json
+import time
 from typing import Dict, List, Optional, Set, Tuple
 
 try:
@@ -133,6 +134,297 @@ def _merge_icite_edges(papers: Dict, edges: List[dict],
     if progress and injected:
         print(f"  [refgraph] icite merge: {injected} resolved edges injected")
     return injected
+
+
+# ---------------------------------------------------------------------------
+# iCite (PubMed) verified citation graph — generic fetch pipeline
+# (distilled from eph_rag/scripts/build_citation_graph_full.py +
+#  rebuild_graph_from_cache.py, 2026-08-31; corpus-agnostic version)
+# ---------------------------------------------------------------------------
+
+_EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+_ICITE_API = "https://icite.od.nih.gov/api/pubs"
+_NCBI_THROTTLE = 0.35          # s between eutils calls (NCBI courtesy limit)
+_UA = "bib_rag-icite-builder/1.0"
+
+
+def _ncbi_get(url: str, retries: int = 3, timeout: int = 30,
+              throttle: Optional[list] = None):
+    """Throttled GET returning parsed JSON, or None after final retry."""
+    import urllib.request
+    _t = throttle if throttle is not None else [0.0]
+    for attempt in range(retries):
+        wait = _NCBI_THROTTLE - (time.time() - _t[0])
+        if wait > 0:
+            time.sleep(wait)
+        _t[0] = time.time()
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": _UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except Exception:
+            if attempt == retries - 1:
+                return None
+            time.sleep(2 * (attempt + 1))
+    return None
+
+
+def _norm_title(t: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", "", (t or "").lower()).strip()
+
+
+def _title_sim(a: str, b: str) -> float:
+    A, B = set(_norm_title(a).split()), set(_norm_title(b).split())
+    if not A or not B:
+        return 0.0
+    return len(A & B) / max(len(A), len(B))
+
+
+def _icite_corpus_registry() -> Dict[str, dict]:
+    """All parent_store sources with meta (source key = chroma .md form).
+
+    Key = the parent JSON's own `source` field (chroma metadata.source,
+    e.g. "12351647.md"), NOT the parent-store filename stem — sanitization
+    is lossy, the source field is authoritative. Filename-stem fallback
+    only for legacy entries lacking the field."""
+    registry = {}
+    for stem, parents, meta in _iter_parent_store():
+        src = (parents[0].get("source") or "").strip()
+        if not src:
+            src = f"{stem}.md"
+        pm = str(meta.get("pmid") or "").strip()
+        if not re.fullmatch(r"\d+", pm):
+            # digit-filename convention: source "12351647.md" -> PMID
+            base = src[:-3] if src.endswith(".md") else src
+            if re.fullmatch(r"\d+", base):
+                pm = base
+        registry[src] = {
+            "pmid": pm,
+            "title": (meta.get("title") or "").strip(),
+            "doi": (meta.get("doi") or "").strip(),
+            "year": str(meta.get("year") or "").strip(),
+            "journal": (meta.get("journal") or "").strip(),
+        }
+    return registry
+
+
+def build_icite_graph(progress: bool = False,
+                      resolve_limit: int = 0) -> Optional[Dict]:
+    """Fetch PubMed/iCite-verified citation edges for the ACTIVE library.
+
+    Phase A  resolve PMIDs for every parent_store source lacking one
+             (esearch DOI-first, title+year fallback with 0.85 title-sim
+             gate) — resumable cache data/icite_pmid_resolution.json
+    Phase B  fetch iCite records for all corpus PMIDs in batches of 100 —
+             resumable cache data/icite_corpus_icite.json
+    Phase C  build the source-key graph (cross-expanding duplicate PMIDs),
+             write data/citation_graph.json (+ .csv mirror), then rebuild
+             reference_graph.json so _merge_icite_edges picks it up.
+
+    resolve_limit>0 caps Phase A network calls (dry-run probing).
+    Returns the written citation-graph dict, or None when the corpus has
+    no resolvable PMIDs.
+    """
+    import urllib.parse
+    cfg = get_config()
+    data_dir = cfg["data_dir"]
+    os.makedirs(data_dir, exist_ok=True)
+    res_cache = os.path.join(data_dir, "icite_pmid_resolution.json")
+    icite_cache = os.path.join(data_dir, "icite_corpus_icite.json")
+    out_path = os.path.join(data_dir, "citation_graph.json")
+
+    registry = _icite_corpus_registry()
+    if progress:
+        print(f"[icite] registry: {len(registry)} sources; "
+              f"with PMID {sum(1 for v in registry.values() if v['pmid'])}")
+    if not registry:
+        return None
+
+    def _log(msg):
+        if progress:
+            print(f"[icite] {msg}", flush=True)
+
+    # ---- Phase A: PMID resolution (resumable) ----
+    res = {}
+    if os.path.exists(res_cache):
+        try:
+            res = json.load(open(res_cache, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            res = {}
+    for s, r in res.items():          # cache first, then meta fallback
+        if s in registry and not registry[s]["pmid"] and r.get("pmid"):
+            registry[s]["pmid"] = str(r["pmid"])
+    todo = [s for s, v in registry.items() if not v["pmid"] and s not in res]
+    if resolve_limit:
+        todo = todo[:resolve_limit]
+    _log(f"PMID resolution todo: {len(todo)} (cached: {len(res)})")
+    throttle = [0.0]
+    for i, s in enumerate(todo, 1):
+        v = registry[s]
+        pmid, method = "", ""
+        if v["doi"]:
+            term = f"{v['doi']}[DOI]"
+            url = (f"{_EUTILS}/esearch.fcgi?db=pubmed&retmode=json&term="
+                   + urllib.parse.quote(term))
+            d = _ncbi_get(url, throttle=throttle)
+            ids = (d or {}).get("esearchresult", {}).get("idlist", [])
+            if len(ids) == 1:
+                pmid, method = ids[0], "doi"
+            elif len(ids) > 1:
+                pmid, method = ids[0], "doi_multi"
+        if not pmid and v["title"]:
+            year = v["year"][:4] if re.match(r"(19|20)\d{2}", v["year"]) else ""
+            term = f'"{v["title"]}"[Title]' + (f" AND {year}[pdat]" if year else "")
+            url = (f"{_EUTILS}/esearch.fcgi?db=pubmed&retmode=json&term="
+                   + urllib.parse.quote(term))
+            d = _ncbi_get(url, throttle=throttle)
+            ids = (d or {}).get("esearchresult", {}).get("idlist", [])[:3]
+            if ids:
+                su = (f"{_EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id="
+                      + ",".join(ids))
+                d2 = _ncbi_get(su, throttle=throttle)
+                best, best_sim = "", 0.0
+                for uid in (d2 or {}).get("result", {}).get("uids", []):
+                    p = d2["result"][uid]
+                    sim = _title_sim(v["title"], p.get("title", ""))
+                    if sim > best_sim:
+                        best, best_sim = uid, sim
+                if best and best_sim >= 0.85:
+                    pmid, method = best, f"title:{best_sim:.2f}"
+        res[s] = {"pmid": pmid, "method": method}
+        if pmid:
+            registry[s]["pmid"] = pmid
+        if i % 100 == 0 or i == len(todo):
+            with open(res_cache, "w", encoding="utf-8") as f:
+                json.dump(res, f)
+            _log(f"resolution {i}/{len(todo)} "
+                 f"resolved_total={sum(1 for x in res.values() if x['pmid'])}")
+    with open(res_cache, "w", encoding="utf-8") as f:
+        json.dump(res, f)
+    resolved = sum(1 for v in registry.values() if v["pmid"])
+    _log(f"Phase A done: corpus PMIDs {resolved}/{len(registry)}")
+
+    # ---- Phase B: iCite fetch (resumable, batches of 100) ----
+    icite = {}
+    if os.path.exists(icite_cache):
+        try:
+            icite = {int(k): v for k, v in json.load(
+                open(icite_cache, encoding="utf-8")).items()}
+        except (OSError, json.JSONDecodeError):
+            icite = {}
+    all_pm = sorted({int(v["pmid"]) for v in registry.values() if v["pmid"]})
+    fetch = [p for p in all_pm if p not in icite]
+    _log(f"iCite fetch: {len(fetch)} new PMIDs (cached: {len(icite)})")
+    import urllib.request
+    B = 100
+    for i in range(0, len(fetch), B):
+        batch = fetch[i:i + B]
+        qs = ",".join(str(p) for p in batch)
+        for attempt in range(3):
+            try:
+                url = f"{_ICITE_API}?pmids={qs}"
+                req = urllib.request.Request(url, headers={"User-Agent": _UA})
+                with urllib.request.urlopen(req, timeout=90) as r:
+                    d = json.load(r)
+                for p in d.get("data", []):
+                    icite[int(p["pmid"])] = {
+                        "year": p.get("year"),
+                        "journal": p.get("journal"),
+                        "citation_count": p.get("citation_count"),
+                        "rcr": p.get("relative_citation_ratio"),
+                        "cited_by": p.get("cited_by") or [],
+                        "references": p.get("references") or [],
+                    }
+                break
+            except Exception:
+                if attempt == 2:
+                    _log(f"  iCite batch {i // B + 1} failed")
+                time.sleep(3 * (attempt + 1))
+        if (i // B) % 5 == 0:
+            with open(icite_cache, "w", encoding="utf-8") as f:
+                json.dump({str(k): v for k, v in icite.items()}, f)
+    with open(icite_cache, "w", encoding="utf-8") as f:
+        json.dump({str(k): v for k, v in icite.items()}, f)
+    _log(f"Phase B done: iCite records {len(icite)}")
+
+    # ---- Phase C: source-key graph ----
+    pm2src = {}
+    for s, v in registry.items():
+        if v["pmid"]:
+            pm2src.setdefault(int(v["pmid"]), []).append(s)
+    edges, edges_pmid = set(), set()
+    for P, v in icite.items():
+        if P not in pm2src:
+            continue
+        for c in v["cited_by"]:
+            C = int(c)
+            if C in pm2src and C != P:
+                edges_pmid.add((C, P))
+                for a in pm2src[C]:
+                    for b in pm2src[P]:
+                        if a != b:
+                            edges.add((a, b))
+        for r_ in v["references"]:
+            R = int(r_)
+            if R in pm2src and R != P:
+                edges_pmid.add((P, R))
+                for a in pm2src[P]:
+                    for b in pm2src[R]:
+                        if a != b:
+                            edges.add((a, b))
+    in_deg, out_deg = {}, {}
+    for a, b in edges:
+        in_deg[b] = in_deg.get(b, 0) + 1
+        out_deg[a] = out_deg.get(a, 0) + 1
+    nodes = {}
+    for s, v in registry.items():
+        P = int(v["pmid"]) if v["pmid"] else None
+        ic = icite.get(P) if P is not None else None
+        ic = ic or {}
+        nodes[s] = {"pmid": P, "doi": v["doi"], "title": v["title"][:90],
+                    "year": v["year"], "journal": v["journal"][:60],
+                    "citation_count": ic.get("citation_count"),
+                    "rcr": ic.get("rcr"),
+                    "in_corpus_cited_by": in_deg.get(s, 0),
+                    "in_corpus_cites": out_deg.get(s, 0)}
+    graph = {"generated": __import__("datetime").datetime.now().isoformat(
+                 timespec="seconds"),
+             "scope": "full corpus",
+             "key_def": "node key = chroma metadata.source (md filename) — "
+                        "direct join for retrieval results",
+             "n_nodes": len(nodes),
+             "n_with_pmid": sum(1 for n in nodes.values() if n["pmid"]),
+             "n_edges": len(edges),
+             "edge_def": "edges: [citing_source, cited_source]; "
+                         "edges_pmid mirror: [citing_pmid, cited_pmid]",
+             "nodes": nodes,
+             "edges": sorted([list(e) for e in edges]),
+             "edges_pmid": sorted([list(e) for e in edges_pmid])}
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(graph, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, out_path)
+    _log(f"Phase C done: {len(nodes)} nodes / {len(edges)} edges "
+         f"({sum(1 for n in nodes.values() if n['pmid'])} with pmid)")
+
+    # csv mirror (same rows as eph scripts)
+    import csv as _csv
+    src2pm = {s: (int(v["pmid"]) if v["pmid"] else "")
+              for s, v in registry.items()}
+    csv_path = os.path.join(data_dir, "citation_edges.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = _csv.writer(f)
+        w.writerow(["citing_source", "cited_source", "citing_pmid",
+                    "cited_pmid", "citing_title", "cited_title"])
+        for a, b in sorted(edges):
+            w.writerow([a, b, src2pm.get(a, ""), src2pm.get(b, ""),
+                        nodes.get(a, {}).get("title", "")[:70],
+                        nodes.get(b, {}).get("title", "")[:70]])
+    _log(f"csv mirror written: {csv_path}")
+
+    # rebuild reference_graph.json so _merge_icite_edges consumes the update
+    build_reference_graph(progress=progress)
+    return graph
 
 
 def _iter_parent_store():
