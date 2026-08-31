@@ -45,7 +45,26 @@ _CODE_ROOT = os.environ.get(
 # Root defaults derive from BIB_RAG_HOME (default: the directory containing
 # this repo) so a cloned toolkit finds its sibling libraries anywhere:
 #   <BIB_RAG_HOME>/<name>/  e.g. <BIB_RAG_HOME>/eph_rag/
-_RAG_HOME = Path(os.environ.get("BIB_RAG_HOME", Path(__file__).resolve().parent.parent.parent))
+# INSTALLED-package fallback: when the toolkit is pip-installed (not a repo
+# checkout / editable install), parent-of-package lands inside
+# site-packages — no libraries live there. Detect that (neither eph_rag/
+# nor geo_rag/ exists) and fall back to the canonical install location.
+# BIB_RAG_HOME always wins over both.
+_DERIVED_RAG_HOME = Path(__file__).resolve().parent.parent.parent
+
+def _resolve_rag_home() -> Path:
+    env_home = os.environ.get("BIB_RAG_HOME")
+    if env_home:
+        return Path(env_home)
+    # repo-checkout / editable-install layout: sibling library folders exist
+    if (_DERIVED_RAG_HOME / "eph_rag").is_dir() or \
+       (_DERIVED_RAG_HOME / "geo_rag").is_dir():
+        return _DERIVED_RAG_HOME
+    # pip-installed package (site-packages) — no sibling libraries; use the
+    # canonical data location next to the original install root.
+    return Path("/Disk_bot/RAG")
+
+_RAG_HOME = _resolve_rag_home()
 
 _KB_REGISTRY = {
     "eph_rag": {
