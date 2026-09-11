@@ -80,6 +80,10 @@ def enrich_metadata_with_parent_fallback(results: List[Dict]) -> List[Dict]:
         # Annotate whether the chunk came from a disabled paper.
         # The JSON file on disk is named via _safe_filename(source) (strips
         # non-word chars), so we must use the same rule to check existence.
+        # Import quirks (2026-08-30/31, 2026-09-04): top500 batch names files
+        # `{stem}_md.json` while source metadata says `{stem}.md`; Zotero-style
+        # filenames truncate at 100 chars with a trailing `_`. Check all
+        # plausible variants before flagging.
         try:
             try:  # bib_rag-package-try
                 from .parent_store_manager import ParentStoreManager as _PSM
@@ -87,18 +91,47 @@ def enrich_metadata_with_parent_fallback(results: List[Dict]) -> List[Dict]:
                 from parent_store_manager import ParentStoreManager as _PSM
             p_source = parent.get("source", "")
             if p_source:
-                # strip .md if present, then apply _safe_filename, then add .json
-                if p_source.endswith(".md"):
-                    stem = p_source[:-3]
-                else:
-                    stem = p_source
-                safe_name = _PSM(store_dir=PARENT_STORE_DIR_PRIMARY)._safe_filename(stem)
-                primary_path = os.path.join(PARENT_STORE_DIR_PRIMARY, f"{safe_name}.json")
-                if not os.path.exists(primary_path):
-                    meta["_note"] = "paper_in_disabled_store"
+                candidates = set()
+                for s in _source_filename_stems(p_source):
+                    safe_name = _PSM(store_dir=PARENT_STORE_DIR_PRIMARY)._safe_filename(s)
+                    for cand in (f"{safe_name}.json",
+                                 f"{safe_name}_md.json",
+                                 f"{safe_name[:-1]}.json") if safe_name.endswith("_") else (f"{safe_name}.json",
+                                                                                             f"{safe_name}_md.json"):
+                        candidates.add(cand)
+                # Fallback: 100-char-truncated Zotero titles leave only a prefix
+                # on disk; match by that prefix if no exact candidate exists.
+                if not any(os.path.exists(os.path.join(PARENT_STORE_DIR_PRIMARY, c))
+                           for c in candidates):
+                    prefix = _PSM(store_dir=PARENT_STORE_DIR_PRIMARY)._safe_filename(
+                        p_source[:-3] if p_source.endswith(".md") else p_source)[:60]
+                    for f in os.listdir(PARENT_STORE_DIR_PRIMARY):
+                        if f.endswith(".json") and f.startswith(prefix):
+                            candidates.add(f)
+                if not any(os.path.exists(os.path.join(PARENT_STORE_DIR_PRIMARY, c))
+                           for c in candidates):
+                    # Genuinely disabled papers live only in parent_store_disabled/.
+                    if not any(os.path.exists(os.path.join(PARENT_STORE_DIR_DISABLED, c))
+                               for c in candidates):
+                        meta["_note"] = "paper_in_disabled_store"
         except Exception:
             pass
     return results
+
+
+def _source_filename_stems(source: str):
+    """Candidate filename stems for a parent's on-disk JSON.
+
+    source metadata may carry trailing `.md` / `.pdf.md` that the import
+    scripts handled inconsistently (2026-08-30 top500 batch). Yield the raw
+    stem plus each extension-stripped variant.
+    """
+    s = source
+    if s.endswith(".md"):
+        s = s[:-3]
+    yield s
+    if s.endswith(".pdf"):
+        yield s[:-4]
 
 
 def embed_query(text: str) -> List[float]:

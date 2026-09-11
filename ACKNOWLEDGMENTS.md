@@ -59,5 +59,4 @@ bib_rag 本身以 [MIT License](LICENSE) 发布。
 ## 说明
 
 - **许可兼容性**：bib_rag 为 MIT。所借鉴项目的许可（MIT / Apache-2.0 / AGPL-3.0）均为机制思路参考、无源码复制，不受 AGPL 传染条款约束；若未来直接引用 bibliometrix 的代码或数据，需重新评估许可兼容性。
-- **调研谱系**：23 份技术笔记存于 `RAG/notes/`（Agentic_RAG / citation_rag / zotero_RAG 三组 + 横向调研），对比与借鉴清单见 `RAG/notes/bib_rag_对比与借鉴.md`。
 - **遗漏处理**：如发现本清单遗漏了某项目的贡献，请开 issue，我们会及时补上。

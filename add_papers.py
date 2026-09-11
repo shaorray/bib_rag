@@ -24,6 +24,8 @@ Options:
   --papers-dir      Target markdown directory (default: <active library>/md)
   --verify QUERY    After adding, run a test query to verify
   --dry-run         Show what would be done without executing
+  --no-enrich       Skip metadata enrichment (Crossref/PubMed backfill)
+  --enrich-offline  Enrichment regex-scan only, no network calls
 """
 
 import os
@@ -54,28 +56,122 @@ QUERY_SCRIPT = CODE_ROOT / "src" / "query_bib_rag.py"
 # is retired — it depended on SentenceTransformer which no longer imports.
 from index_single_paper import index_paper
 
+# Metadata enrichment (Crossref/PubMed backfill of doi/pmid/title/journal/authors)
+# at add-time. Imported lazily in enrich_step() so --no-enrich runs never pay
+# the meta_audit import cost. See src/enrich_meta.py.
+ENRICH_ONLINE = True   # --no-enrich sets False
+ENRICH_NETWORK = True  # --enrich-offline sets False (regex-scan only)
+
+def enrich_step(md_files: list, online: bool = True) -> dict:
+    """Fill missing metadata (DOI/PMID/...) in each md via Crossref/PubMed.
+
+    Writes a front-matter block (Title:/Authors:/.../doi:/PMID:/PMCID:) into
+    the md BEFORE indexing, so chunking.extract_meta and hybrid_search pick
+    the fields up without any changes on their side. Returns
+    {md_filename: meta_dict} for run_build to pass into index_paper as
+    meta_override (the chunker alone misses front-matter titles).
+    Never raises — a failed lookup leaves the regex-scanned values in place
+    and indexing proceeds.
+    """
+    out: dict = {}
+    if not md_files:
+        return out
+    try:
+        from enrich_meta import enrich_md, local_meta, upsert_frontmatter
+    except ImportError:
+        print("   ⚠️ enrich_meta unavailable — indexing without enrichment")
+        return out
+    if not online:
+        # offline mode: local regex scan only (identifiers already in the text)
+        for md in md_files:
+            try:
+                meta = local_meta(md)
+                upsert_frontmatter(md, meta)
+                out[md.name] = meta
+            except Exception as e:
+                print(f"   ⚠️ offline-enrich failed for {md.name}: {e}")
+        return out
+    for md in md_files:
+        try:
+            meta = enrich_md(md)
+            out[md.name] = meta
+            gained = [k for k in ("doi", "pmid", "pmcid", "title", "year", "journal", "authors")
+                      if meta.get(k)]
+            print(f"   🧪 enriched: {', '.join(gained) if gained else 'nothing found'}")
+        except Exception as e:
+            print(f"   ⚠️ enrich failed for {md.name} (continuing): {e}")
+    return out
+
 # ---- PDF Extraction ----
 
-def extract_pdf_to_md(pdf_path: Path, output_dir: Path) -> Path | None:
-    """Extract a single PDF to markdown using pymupdf4llm."""
-    try:
-        import pymupdf4llm
-    except ImportError:
-        print("❌ pymupdf4llm not installed. Run: pip install pymupdf4llm")
-        return None
+def _extract_one_pdf_subprocess(pdf_path: Path, md_path: Path) -> tuple[bool, str]:
+    """Run pymupdf4llm extraction in an isolated subprocess.
 
+    pymupdf 1.27's ONNX layout model (BoxRFDGNN) SEGFAULTS on some pages
+    (observed 2026-09-10: Cell Research open-access PDF, JMG 2006 scan) —
+    a native crash that cannot be caught with try/except in-process.
+    Running per-PDF in a subprocess turns a fatal batch event into a
+    one-file failure. ~200ms overhead per file, worth it for robustness.
+    Returns (ok, diagnostic).
+    """
+    import subprocess
+    # pymupdf4llm 1.27 layout mode runs an ONNX model that segfaults in this
+    # environment (onnxruntime × pymupdf._mupdf interplay, 2026-09-10). The
+    # classic pymupdf_rag path (use_layout(False)) extracts the same PDFs
+    # without the ONNX dependency and without crashing.
+    code = (
+        "import pymupdf4llm, pathlib\n"
+        "pymupdf4llm.use_layout(False)\n"
+        f"md = pymupdf4llm.to_markdown({str(pdf_path)!r})\n"
+        f"pathlib.Path({str(md_path)!r}).write_text(md, encoding='utf-8')\n"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-B", "-c", code],
+            capture_output=True, text=True, timeout=300,
+            env={**os.environ, "OMP_NUM_THREADS": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout after 300s"
+    if r.returncode == 0 and md_path.exists() and md_path.stat().st_size > 0:
+        return True, ""
+    # negative returncode = killed by signal (segfault = -11); NEVER retry
+    # in-process — the same native crash would take down the whole batch
+    sig = f", killed by signal {-r.returncode}" if r.returncode < 0 else ""
+    err = (r.stderr or "").strip().splitlines()
+    err = err[-1][:120] if err else ""
+    return False, f"subprocess exit {r.returncode}{sig} {err}"
+
+
+def extract_pdf_to_md(pdf_path: Path, output_dir: Path) -> Path | None:
+    """Extract a single PDF to markdown using pymupdf4llm (isolated subprocess).
+
+    A crash-prone PDF fails alone; the batch continues. No in-process
+    fallback by design (see _extract_one_pdf_subprocess docstring).
+    """
     md_filename = pdf_path.stem + ".md"
     md_path = output_dir / md_filename
 
     print(f"  📄 Extracting: {pdf_path.name}")
     try:
-        md_text = pymupdf4llm.to_markdown(str(pdf_path))
-        md_path.write_text(md_text, encoding='utf-8')
-        print(f"     ✅ → {md_path.name} ({len(md_text):,} chars)")
-        return md_path
-    except Exception as e:
-        print(f"     ❌ Extraction failed: {str(e)[:100]}")
+        import pymupdf4llm  # noqa: F401  (availability check only)
+    except ImportError:
+        print("❌ pymupdf4llm not installed. Run: pip install pymupdf4llm")
         return None
+
+    ok, diag = _extract_one_pdf_subprocess(pdf_path, md_path)
+    if not ok:
+        print(f"     ❌ Extraction failed in isolation ({diag}) — skipping file")
+        if md_path.exists():
+            md_path.unlink()   # remove any partial output
+        return None
+    size = md_path.stat().st_size
+    if size < 500:
+        print(f"     ⚠️ Suspiciously small ({size}B) — extraction likely failed")
+        md_path.unlink()
+        return None
+    print(f"     ✅ → {md_path.name} ({size:,} bytes)")
+    return md_path
 
 
 def find_pdfs(input_paths: list[str]) -> list[Path]:
@@ -109,19 +205,23 @@ def find_existing_md(pdf_path: Path, papers_dir: Path) -> Path | None:
 
 # ---- Build ----
 
-def run_build(md_files: list, batch_size: int) -> bool:
+def run_build(md_files: list, batch_size: int, meta_map: dict = None) -> bool:
     """Index each markdown file via src/index_single_paper.index_paper().
 
     Uses the llama-server embedding endpoint (port 8081) — the same bge-m3 model
     the retired build_hierarchical.py used, but without the broken
     SentenceTransformers import.
+
+    meta_map: optional {md_filename: meta} from enrich_step — passed to
+    index_paper so enrichment fields beat the chunker's filename fallbacks.
     """
+    meta_map = meta_map or {}
     print(f"\n🔧 Indexing {len(md_files)} markdown file(s) via index_single_paper...")
     ok = 0
     for i, md in enumerate(md_files, 1):
         print(f"\n[{i}/{len(md_files)}]")
         try:
-            if index_paper(md):
+            if index_paper(md, meta_override=meta_map.get(Path(md).name)):
                 ok += 1
         except Exception as e:
             print(f"   ❌ Index failed: {e}")
@@ -168,7 +268,17 @@ def main():
                         help="Run a test query after adding")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be done without executing")
+    parser.add_argument("--no-enrich", action="store_true",
+                        help="Skip Crossref/PubMed metadata enrichment")
+    parser.add_argument("--enrich-offline", action="store_true",
+                        help="Enrichment regex-scan only (no network); implies enrichment on")
     args = parser.parse_args()
+
+    global ENRICH_ONLINE, ENRICH_NETWORK
+    if args.no_enrich:
+        ENRICH_ONLINE = False
+    if args.enrich_offline:
+        ENRICH_ONLINE, ENRICH_NETWORK = True, False
 
     papers_dir = Path(args.papers_dir)
     papers_dir.mkdir(parents=True, exist_ok=True)
@@ -227,14 +337,25 @@ def main():
 
     print(f"\n📊 Summary: {total_new} new, {total_skip} already indexed")
 
+    # ---- Step 2a: Metadata enrichment (before indexing) ----
+    # All new + skipped markdown files (skipped = already extracted MD)
+    md_to_index = md_files_added + md_files_skipped
+    meta_map: dict = {}
+    if ENRICH_ONLINE:
+        print(f"\n{'─'*70}")
+        print("Step 2a: Metadata enrichment (Crossref/PubMed)"
+              + (" — offline regex-scan only" if not ENRICH_NETWORK else ""))
+        print(f"{'─'*70}")
+        meta_map = enrich_step(md_to_index, online=ENRICH_NETWORK)
+    else:
+        print("\n⏭️  Metadata enrichment skipped (--no-enrich)")
+
     # ---- Step 3: Index (via index_single_paper) ----
     print(f"\n{'─'*70}")
     print("Step 2: Indexing markdown files")
     print(f"{'─'*70}")
 
-    # Index all new + skipped markdown files (skipped = already extracted MD)
-    md_to_index = md_files_added + md_files_skipped
-    success = run_build(md_to_index, args.batch_size)
+    success = run_build(md_to_index, args.batch_size, meta_map=meta_map)
     if not success:
         print("\n⚠️  Indexing had issues. Papers may not be fully indexed.")
         sys.exit(1)

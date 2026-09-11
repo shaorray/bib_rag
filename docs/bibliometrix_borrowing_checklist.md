@@ -41,9 +41,9 @@
 ⚠️ 已发现缺口：reranker 未使用任何引用元数据（citation_count/rcr/in_corpus_cited_by 已入 chroma 但查询时不读）——零新数据快赢。
 
 ## 直接进 agent loop（按价值排序）
-- [ ] 1. 引文字符串匹配（LTWA+stringdist）→ 解锁 reference_graph ~42.7K raw 边（vs 现可遍历 17.5K iCite 边，~2.4×），snowball/find_papers_citing 获得论文自带参考文献路径；先本地匹配、API 兜底 ⭐⭐⭐
-- [ ] 2. 中心性（pagerank/HITS authority-hub/betweenness）写 chunk 元数据 + reranker 接线（连同已有 rcr）；authority=滚雪球最佳起点，hub=综述型入口 ⭐⭐⭐
-- [ ] 3. Louvain 社区标签入元数据 → 检索后覆盖度自检（证据是否困在单簇）+ query→簇路由（where 过滤） ⭐⭐
+- [ ] 1. 引文字符串匹配 → 本地匹配已完成 ✅ 2026-08-31（match_references.py → reference_graph_matched.json：40,245 边，strong 932 / weak 1,491 / 17,079 目标=14.2%，join 100%，227 篇获 iCite 未覆盖的入边；⚠️ weak 档精度仅 14-34% 不可未验证接线；snowball 接线 + Crossref 兜底 = phase 2）
+- [x] 2. 中心性写 chunk 元数据 + provenance boost 接线 ✅ 2026-08-31（apply_post_fusion stage 2b，×1.08 封顶、正分守卫、BIB_RAG_PROVENANCE 开关；详见 /Disk_bot/tmp/ws_a_report.md）
+- [x] 3. Louvain 社区标签（434 社区）入元数据 + check_evidence_coverage 第 7 号 agent 工具 ✅ 2026-08-31（>70% 单簇告警；query→簇路由仍待做）
 - [ ] 4. 共词网络（termExtraction: LTWA+stemming+stopwords）→ 语料接地的查询扩展表，升级 broaden.py（现为纯 embedding 邻居） ⭐⭐
 - [ ] 5. Salton/Jaccard 归一化 → related_papers/snowball 邻居排序去高被引偏置，多跳少重复 ⭐⭐
 - [ ] 6. RPYS 奠基集 → answer 节点的充分性/停止信号（自研适配，bibliometrix 原为离线图谱） ⭐

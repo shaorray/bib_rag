@@ -100,8 +100,9 @@ log = logging.getLogger("meta_audit")
 
 from bib_utils import (
     BibIndex, extract_abstract, extract_year_from_content, filename_to_key,
-    is_doi_like, is_fake_doi, jaccard, normalize, normalize_doi,
-    parse_bib_entries, strip_author_year_prefix, title_tokens,
+    is_doi_like, is_fake_doi, is_junk_title, jaccard, normalize, normalize_doi,
+    parse_bib_entries, strip_author_year_prefix, title_search_sim,
+    title_tokens,
 )
 
 import zotero_access  # noqa: E402  (scripts/ sibling; MCP-first Zotero access)
@@ -180,17 +181,8 @@ def _filename_identity(fname: str) -> Optional[Tuple[str, str, str, str]]:
     return (surname, year, tseg, surname_raw)
 
 
-_JUNK_TITLE_RE = [
-    r"^https?://", r"^www\.", r"^pubs\.acs\.org", r"^10\.\d",
-    r"^(research|review|original|rapid)\s+(article|paper|communication|communication)\s*$",
-    r"^received:.*accepted", r"^editorial board", r"^contents",
-    r"^full length article", r"^open access", r"^article\s*$",
-    r"^online access available", r"^sciencedirect", r"^elsevier",
-    r"^this article has been retracted", r"^retraction",
-    r"^table\s+\d", r"^fig(ure)?\.?\s*\d",
-    r"^answers?\s+to", r"^accepted (author )?manuscript",
-    r"^author['’]?s accepted manuscript",
-]
+# is_junk_title / title_search_sim (canonical, shared with enrich_meta and
+# any future consumer) live in scripts/bib_utils.py — imported at the top.
 
 
 def _pmid_from_filename(fname: str) -> Optional[str]:
@@ -275,17 +267,9 @@ def extract_title_from_content(data: list) -> str:
     return ""
 
 
-def is_junk_title(title: str) -> bool:
-    """True if a meta title carries no real bibliographic signal (journal
-    header noise, submission timestamps, URLs) — the filename title should be
-    used for registry search instead."""
-    if not title or not str(title).strip():
-        return True
-    s = re.sub(r"[*_`#]", "", str(title)).strip()
-    if len(title_tokens(s)) < 3:
-        return True
-    low = s.lower()
-    return any(re.match(p, low) for p in _JUNK_TITLE_RE)
+# is_junk_title / _title_search_sim live in bib_utils.py (canonical home,
+# merged 2026-09-10 from this module's fork + enrich_meta's). They are
+# imported at the top; audit mode is the default mode there.
 
 
 def _content_supports_identity(data: list, f_title: str) -> float:
@@ -383,24 +367,13 @@ def _identity_assessment(fname: str, meta: Dict[str, Any],
 
 
 def _title_search_sim(claimed_title: str, result_title: str) -> float:
-    """Similarity between a claimed title and a registry result title.
+    """Thin delegate to bib_utils.title_search_sim (canonical home).
 
-    PREFIX-RECALL semantics, shared by search-time best-pick AND the
-    confidence gate: filenames truncate at 255 bytes, so a perfect registry
-    match reads ~0.67 under plain Jaccard. Recall (claimed tokens covered by
-    the result) stays 1.0 under pure truncation; a wrong paper loses recall.
-    The symmetric precision floor (>= 0.5) guards short-result false hits.
+    Kept as a one-line local alias because tests (test_utilities.py) grep
+    this module for `_title_search_sim` in call-site introspection. Audit
+    semantics = accept TITLE_JACCARD_MATCH (0.80) — the default there.
     """
-    ct = title_tokens((claimed_title or "")[:60])
-    rt = title_tokens((result_title or "")[:60])
-    if not ct or not rt:
-        return 0.0
-    inter = len(ct & rt)
-    recall = inter / len(ct)
-    precision = inter / len(rt)
-    if recall >= TITLE_JACCARD_MATCH and precision >= 0.5:
-        return recall
-    return jaccard(ct, rt)
+    return title_search_sim(claimed_title, result_title, accept=TITLE_JACCARD_MATCH)
 
 
 def _oracle_rejects(fix: Dict[str, str], oracle) -> bool:

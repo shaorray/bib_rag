@@ -82,6 +82,100 @@ def jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
+# ---------------------------------------------------------------------------
+# Title gating (canonical home — merged 2026-09-10 from the behavior-forked
+# copies in meta_audit.py and enrich_meta.py)
+#
+# is_junk_title / title_search_sim each existed twice with the same name and
+# different surfaces. Single definitions live here; the two consumers differ
+# only by mode / accept threshold:
+#
+#   mode="audit"  — parent-store meta titles (older, noisier extractors):
+#                   banner/header/submission-noise classes are junk.
+#   mode="search" — raw PDF first-line titles feeding a Crossref title
+#                   search. Keeps every audit class and ADDS classes that
+#                   make a bad search key: markdown residue, journal
+#                   vol/page headers, ALL-CAPS strings. The cost asymmetry
+#                   drives the split — a bad audit verdict only flags a
+#                   field for repair, but a bad search verdict can attach a
+#                   DIFFERENT paper's DOI (citation hijack), so search mode
+#                   is deliberately stricter. A stylized ALL-CAPS article
+#                   title is skipped too: a missed lookup costs one DOI,
+#                   a hijacked one costs the paper's identity.
+# ---------------------------------------------------------------------------
+
+_JUNK_TITLE_MIN_TOKENS = 3
+
+# banner noise that can never be a title (any mode)
+_JUNK_TITLE_RE = [
+    r"^https?://", r"^www\.", r"^pubs\.acs\.org", r"^10\.\d",
+    r"^(research|review|original|rapid|full\s+length)?\s*(article|paper|communication)\s*$",
+    r"^case\s+report\s*$", r"^editorial\s*$",
+    r"^received:.*accepted", r"^editorial board", r"^contents",
+    r"^open access", r"^online access available",
+    r"^sciencedirect", r"^elsevier", r"^this article has been retracted",
+    r"^retraction", r"^table\s+\d", r"^fig(ure)?\.?\s*\d",
+    r"^answers?\s+to", r"^accepted (author )?manuscript",
+    r"^author['’]?s accepted manuscript",
+]
+
+# journal vol/page header smuggled into a title field, e.g.
+# "J Med Life. 2023;16(4):570-576" / "Eur J Anat 25 (3): 175-182 (2021)".
+# (The pre-merge enrich fork's r"\d+\s*\(\d+\)\s*\d+" matched NONE of these —
+# the ':', ';', and ' – ' between the paren groups broke it.)
+_RE_VOLPAGE = re.compile(r"\d+\s*\(\s*\d+\s*\)\s*[:\-]?\s*\d+")
+
+
+def is_junk_title(title: str, mode: str = "audit") -> bool:
+    """True if a title string carries no real bibliographic signal.
+
+    See the block comment above for the audit/search mode split. Raises
+    nothing, never touches the network.
+    """
+    if not title or not str(title).strip():
+        return True
+    s = str(title)
+    if mode == "search" and re.search(r"[*`[\]#]", s):   # markdown residue
+        return True
+    low = re.sub(r"[*_`#]", "", s).strip().lower()
+    if any(re.match(p, low) for p in _JUNK_TITLE_RE):
+        return True
+    if len(title_tokens(low)) < _JUNK_TITLE_MIN_TOKENS:
+        return True
+    if _RE_VOLPAGE.search(s):
+        return True
+    if mode == "search":
+        words = [w for w in re.split(r"\W+", s) if len(w) > 2]
+        upper = sum(1 for w in words if w.isupper())
+        if len(words) > 2 and upper >= len(words) - 1:   # ALL-CAPS banner
+            return True
+    return False
+
+
+def title_search_sim(claimed: str, result: str, accept: float = 0.80) -> float:
+    """Prefix-recall similarity between a claimed and a registry title.
+
+    PREFIX-RECALL semantics, shared by search-time best-pick AND confidence
+    gates: filenames truncate at 255 bytes, so a perfect registry match reads
+    ~0.67 under plain Jaccard. Recall (claimed tokens covered by the result)
+    stays 1.0 under pure truncation; a wrong paper loses recall. The
+    symmetric precision floor (>= 0.5) guards short-result false hits.
+
+    Callers with a looser policy (enrich_meta: 0.75 on truncated PDF
+    first-line titles) pass accept= explicitly.
+    """
+    ct = title_tokens((claimed or "")[:60])
+    rt = title_tokens((result or "")[:60])
+    if not ct or not rt:
+        return 0.0
+    inter = len(ct & rt)
+    recall = inter / len(ct)
+    precision = inter / len(rt)
+    if recall >= accept and precision >= 0.5:
+        return recall
+    return jaccard(ct, rt)
+
+
 def strip_trailing_md(s: str) -> str:
     """Strip a trailing `_md` / `_md.json` marker from a parent_store filename.
 

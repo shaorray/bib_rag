@@ -265,7 +265,6 @@ bib_rag/                      ← toolkit (code only; DATA lives in sibling libr
 │   ├── query_bib_rag.py        ← Quick semantic search & citations
 │   ├── bib_rag_writer.py       ← PARAGRAPH COMPOSER: grill→retrieve→synthesize (backends:
 │   │     default LLM · --no-llm template · --debate relational; markdown + citations;
-│   │     2026-08-31 merged from bib_rag_grill.py + writer/writer_debate shims;
 │   │     dependency policy: retrieval-metadata citations, no odfpy/zotero_access)
 │   ├── parent_store_manager.py ← Parent chunk loader
 │   └── evaluate.py                       ← eval harness (tests live in tests/)

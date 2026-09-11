@@ -72,7 +72,7 @@ def _embed_one(text, retries=3):
             _time.sleep(2 * (attempt + 1))
     return None
 
-def index_paper(md_path):
+def index_paper(md_path, meta_override=None):
     md_path = Path(md_path)
     print(f"\n{'='*60}")
     print(f"Indexing: {md_path.name}")
@@ -90,6 +90,28 @@ def index_paper(md_path):
         return False
 
     meta = extract_meta(cleaned, md_path.name)
+    # meta_override: enrichment results (add_papers --enrich path). Values
+    # from the enrich step (Crossref/PubMed-verified, written as front-matter
+    # into the md) fill blanks and replace junk (filename-stem titles,
+    # out-of-range years, fragment journals); a sane value the text-scan
+    # found itself is kept (document-stated wins over registry).
+    if meta_override:
+        try:
+            from enrich_meta import _looks_like_filename, _is_junk_value
+        except ImportError:
+            _looks_like_filename = lambda s: False   # noqa: E731
+            _is_junk_value = lambda k, v: False      # noqa: E731
+        for k, v in meta_override.items():
+            if not v:
+                continue
+            if (not meta.get(k)
+                    or (k == 'title' and _looks_like_filename(meta.get('title', '')))
+                    or _is_junk_value(k, meta.get(k, ''))):
+                meta[k] = str(v)
+        # scrub junk that no override replaced (empty beats demonstrably wrong)
+        for k in ('year', 'journal'):
+            if _is_junk_value(k, meta.get(k, '')):
+                meta[k] = ''
     print(f"  Title: {meta.get('title', 'N/A')[:80]}")
     print(f"  Year:  {meta.get('year', 'N/A')}")
     print(f"  DOI:   {meta.get('doi', 'N/A')}")

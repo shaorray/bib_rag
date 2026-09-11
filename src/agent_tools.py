@@ -501,6 +501,71 @@ class ToolFactory:
         except Exception as e:
             return f"RELATED_ERROR: {str(e)}"
 
+    def check_evidence_coverage(self, sources: list) -> str:
+        """"Am I hearing every school of thought?" -- community diversity
+        check over an evidence set.
+
+        Maps the given sources onto the citation-graph communities
+        (Louvain, scripts/compute_graph_metrics.py ->
+        data/graph_metrics.json) and reports the cluster distribution.
+        Flags when >70% of labeled evidence comes from one community --
+        a possible one-school bias worth broadening (e.g. via
+        find_related_papers on an outlier hit).
+        """
+        try:
+            try:
+                from .kb_config import get_config
+            except ImportError:
+                from kb_config import get_config
+            import json as _json
+            path = os.path.join(get_config()["data_dir"], "graph_metrics.json")
+            if not os.path.exists(path):
+                return ("NO_LABELS: this library has no graph_metrics.json "
+                        "(run scripts/compute_graph_metrics.py first) -- "
+                        "coverage check unavailable.")
+            with open(path, encoding="utf-8") as f:
+                d = _json.load(f)
+            metrics = d.get("metrics") or d.get("nodes") or {}
+            if not metrics:
+                return ("NO_LABELS: graph_metrics.json carries no "
+                        "per-source metrics.")
+            counts, sizes, unknown = {}, {}, []
+            for s in sources:
+                m = metrics.get(s)
+                if not m or m.get("community_id") is None:
+                    unknown.append(s)
+                    continue
+                cid = m["community_id"]
+                counts[cid] = counts.get(cid, 0) + 1
+                sizes.setdefault(cid, m.get("community_size"))
+            if not counts:
+                return (f"NO_LABELS: none of the {len(sources)} given "
+                        f"sources carry community labels.")
+            total = sum(counts.values())
+            dist = sorted(counts.items(), key=lambda kv: -kv[1])
+            top_cid, top_n = dist[0]
+            lines = [f"--- EVIDENCE COVERAGE: {total} labeled / "
+                     f"{len(unknown)} unlabeled of {len(sources)} sources ---"]
+            for cid, n in dist[:6]:
+                lines.append(f"  community {cid} (corpus size "
+                             f"{sizes.get(cid, '?')}): {n} source(s) -- "
+                             f"{n / total:.0%}")
+            if len(dist) > 6:
+                lines.append(f"  ... +{len(dist) - 6} smaller communities")
+            if top_n / total > 0.7 and total >= 3:
+                lines.append(f"⚠️ {top_n / total:.0%} of evidence sits in one "
+                             f"community (community {top_cid}) -- consider "
+                             f"broadening the search before concluding.")
+            else:
+                lines.append("✅ evidence spans multiple communities")
+            if unknown:
+                shown = ", ".join(str(s) for s in unknown[:5])
+                lines.append(f"unlabeled: {shown}"
+                             + (" ..." if len(unknown) > 5 else ""))
+            return "\n".join(lines)
+        except Exception as e:
+            return f"COVERAGE_ERROR: {str(e)}"
+
 
 from langchain_core.tools import tool
 
@@ -541,8 +606,14 @@ def create_tools(collection=None):
         """Recommend papers related to a given library paper — "I just read X, what should I read next?". Pass a source filename, PMID-stem, or title fragment. Blends topic overlap, embedding similarity, and citation-graph signals; each hit carries a machine-readable `why` (shared topics, cites-it, bibliographic coupling). Use to build reading paths around a seed paper."""
         return factory.related_papers(source, k=k)
 
+    @tool
+    def check_evidence_coverage(sources: list) -> str:
+        """Check whether the retrieved evidence spans multiple citation-graph communities (research schools / subfields). Pass the list of source filenames from your search results. Returns the community distribution and flags >70% concentration in a single community (possible one-school bias). Reports NO_LABELS gracefully when the library lacks community metadata."""
+        return factory.check_evidence_coverage(sources)
+
     return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents,
-            find_papers_citing, get_paper_references, find_related_papers]
+            find_papers_citing, get_paper_references, find_related_papers,
+            check_evidence_coverage]
 
 
 if __name__ == "__main__":

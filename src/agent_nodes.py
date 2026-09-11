@@ -47,8 +47,8 @@ def _resolve_limits():
     # OpenAI-compatible gateway (localhost:11434) and are fast.
     is_local = model.endswith(".gguf") or ":5015" in llm_url
     if is_local:
-        return iters or 3, tools or 4   # slow local model: conservative, avoid timeout
-    return iters or 10, tools or 8      # fast cloud model: generous
+        return iters or 7, tools or 6   # slow local model: conservative, avoid timeout
+    return iters or 12, tools or 10      # fast cloud model: generous
 
 
 MAX_ITERATIONS, MAX_TOOL_CALLS = _resolve_limits()

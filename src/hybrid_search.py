@@ -758,6 +758,65 @@ def is_available() -> bool:
 #
 # Entry dicts need: text (rerank), source (cap/boost). All stages fail soft.
 
+
+_PROV_METRICS = None
+
+
+def _load_provenance_metrics():
+    """data/graph_metrics.json (source -> centralities + citation
+    metrics) for the ACTIVE library, or {} when absent (libraries
+    without a citation-graph metrics run). Loaded once per process."""
+    global _PROV_METRICS
+    if _PROV_METRICS is not None:
+        return _PROV_METRICS
+    try:
+        try:
+            from .kb_config import get_config
+        except ImportError:
+            from kb_config import get_config
+        import json as _json
+        path = os.path.join(get_config()["data_dir"], "graph_metrics.json")
+        with open(path, encoding="utf-8") as f:
+            d = _json.load(f)
+        _PROV_METRICS = d.get("metrics") or d.get("nodes") or {}
+    except Exception:
+        _PROV_METRICS = {}
+    return _PROV_METRICS
+
+
+def provenance_boost(fused):
+    """In-place x(1+delta) importance nudges over the fused entries.
+
+    Max-normalized pagerank/authority (corpus max = 1.0) keep the
+    factors scale-free; the combined factor is hard-capped at 1.08 --
+    same magnitude class as the citation-proximity boost, so
+    cross-encoder relevance stays the dominant signal. Only POSITIVE
+    rerank scores are nudged (a negative logit must not be pushed
+    further down); entries without a rerank score pass through.
+    Env: BIB_RAG_PROVENANCE=0 disables (checked by the caller).
+    """
+    metrics = _load_provenance_metrics()
+    if not metrics or not fused:
+        return
+    pr_max = max((m.get("pagerank") or 0.0) for m in metrics.values()) or 1.0
+    au_max = max((m.get("authority") or 0.0) for m in metrics.values()) or 1.0
+    for e in fused:
+        m = metrics.get(e.get("source", ""))
+        if not m:
+            continue
+        f = 1.0
+        f *= 1.0 + 0.040 * (m.get("pagerank") or 0.0) / pr_max
+        f *= 1.0 + 0.030 * (m.get("authority") or 0.0) / au_max
+        f *= 1.0 + 0.020 * min((m.get("rcr") or 0.0) / 5.0, 1.0)
+        f *= 1.0 + 0.010 * min((m.get("in_corpus_cited_by") or 0) / 20.0, 1.0)
+        f *= 1.0 + 0.008 * min((m.get("citation_count") or 0) / 2000.0, 1.0)
+        f = min(f, 1.08)
+        if f > 1.001 and (e.get("rerank_score") or 0.0) > 0:
+            e["rerank_score"] = round(e["rerank_score"] * f, 4)
+            e["provenance_factor"] = round(f, 4)
+    fused.sort(key=lambda x: -(x.get("rerank_score") or 0.0))
+
+
 def apply_post_fusion(query, fused, limit):
     """Rerank → citation-graph boost → per-source diversity cap.
 
@@ -808,6 +867,20 @@ def apply_post_fusion(query, fused, limit):
                     fused.sort(key=lambda x: -(x.get("rerank_score") or 0.0))
         except Exception:
             warn_post_fusion("citation-boost stage skipped")
+
+    # 2b) Provenance boost (WS-A 2026-08-31): field-internal importance --
+    #     pagerank / HITS authority from the corpus citation graph
+    #     (scripts/compute_graph_metrics.py -> data/graph_metrics.json),
+    #     iCite rcr, global citation_count, in-corpus citations. Gentle
+    #     multiplicative nudges on the rerank score (positive scores
+    #     only), hard-capped at x1.08 so relevance always dominates.
+    #     Sources without metrics get zero boost; stage fails soft.
+    #     Env: BIB_RAG_PROVENANCE (default on, "0" disables).
+    if os.environ.get("BIB_RAG_PROVENANCE", "1") != "0":
+        try:
+            provenance_boost(fused)
+        except Exception:
+            warn_post_fusion("provenance-boost stage skipped")
 
     # 3) Per-source diversity cap (env RAG_SOURCE_CAP, default 2): walk the
     #    reranked pool keeping at most CAP entries per source until limit
