@@ -14,6 +14,13 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Generic-library test isolation: modules imported lazily below (agent_tools,
+# evaluate, citation_guard) call get_config() at import time. The toolkit no
+# longer has a silent default library, so point config at a throwaway empty
+# store before any such import. Tests that need a real/tmp path override this
+# per-test (as several below already do with their own BIB_RAG_ROOT=tmpdir).
+os.environ.setdefault("BIB_RAG_ROOT", tempfile.mkdtemp(prefix="guardtest_lib_"))
+
 
 # ---------------------------------------------------------------------------
 # citation_guard

@@ -3,9 +3,10 @@
 setup_library.py — Scaffold a new RAG library and register it with the toolkit.
 
 Creates the standard library layout, writes a LIBRARY.md + CONTEXT.md starter,
-patches the _KB_REGISTRY in src/kb_config.py, and optionally emits a
-~/.local/bin/<name>-rag wrapper. After running, the new library is immediately
-usable (index + query) — no other code edits needed.
+writes the collection name into the library's own config.json (per-library,
+NOT in source), and emits a ~/.local/bin/<name>-rag wrapper. The wrapper is
+the registration mechanism — it exports BIB_RAG_KB_NAME/BIB_RAG_ROOT/
+BIB_RAG_COLLECTION so no bib_rag source edit is needed.
 
 Usage:
     # Interactive (prompts for everything, sensible defaults):
@@ -19,12 +20,12 @@ Usage:
         --domain "neuroscience / axon guidance" \
         --wrapper
 
-Requires: write access to the RAG home (default: parent of this repo) and the
-bib_rag repo. Never touches
-existing libraries — refuses if the target root already exists (use --force
-to scaffold into an existing directory that lacks the standard subdirs).
+Requires: write access to the RAG home (default: parent of this repo). Never
+touches existing libraries — refuses if the target root already exists (use
+--force to scaffold into an existing directory that lacks the standard subdirs).
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -33,7 +34,6 @@ from pathlib import Path
 
 CODE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(CODE_ROOT / "src"))
-KB_CONFIG = CODE_ROOT / "src" / "kb_config.py"
 WRAPPER_DIR = Path.home() / ".local" / "bin"
 
 STANDARD_DIRS = ["chroma_db_new", "parent_store", "parent_store_disabled", "data", "outputs", "md"]
@@ -98,57 +98,6 @@ Seed topics for classification. Edit freely — the classifier is open-vocab;
 these only anchor the prompt.
 - (e.g. for geology: stratigraphy, mineralogy, tectonics, geochemistry)
 """
-
-
-def patch_registry(name: str, root: str, collection: str) -> bool:
-    """Insert one entry into _KB_REGISTRY in kb_config.py. Idempotent.
-    Uses exact-brace text surgery — regex on '\n}' is dangerous here (it can
-    span the whole file and destroy it; that bug shipped once, 2026-08-27).
-    """
-    s = KB_CONFIG.read_text()
-    if f'"{name}":' in s and f'"{root}"' in s:
-        print(f"  [--] registry already had '{name}'")
-        return False
-    # locate the registry dict boundaries by brace counting from its declaration
-    marker = "_KB_REGISTRY = {"
-    start = s.index(marker) + len(marker) - 1  # position of the opening brace
-    depth = 0
-    end = None
-    for i in range(start, len(s)):
-        if s[i] == "{":
-            depth += 1
-        elif s[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end is None:
-        sys.exit(f"ERROR: could not find the closing brace of _KB_REGISTRY in {KB_CONFIG}")
-    # append the new entry BEFORE the outer closing brace; ensure the previous
-    # last entry ends with a comma (a bare '}' would produce '}' + '"new"' → SyntaxError)
-    body = s[start + 1:end].rstrip()
-    if body and not body.endswith(","):
-        # insert the missing comma right after the last non-whitespace char of body
-        comma_at = start + 1 + len(body.rstrip())
-        s = s[:comma_at] + "," + s[comma_at:]
-        end += 1
-    entry = (f'\n    "{name}": {{\n'
-             f'        "root": "{root}",\n'
-             f'        "collection": "{collection}",\n'
-             f'    }},')
-    new = s[:end] + entry + s[end:]
-    # sanity: file must still contain the functions after the registry
-    for must in ("def get_config", "def parse_kb_arg", "def print_config"):
-        if must not in new:
-            sys.exit(f"ERROR: patched file lost '{must}' — aborting without write. "
-                     f"Fix _KB_REGISTRY manually in {KB_CONFIG}.")
-    # atomic write: backup + temp + os.replace (a truncated kb_config.py bricks
-    # every tool — this file is the single path-resolution point)
-    KB_CONFIG.with_suffix(".py.bak").write_text(s)
-    tmp = KB_CONFIG.with_suffix(".py.tmp")
-    tmp.write_text(new)
-    os.replace(tmp, KB_CONFIG)
-    return True
 
 
 def write_wrapper(name: str, root: str, collection: str, domain: str = "user library") -> Path:
@@ -231,14 +180,22 @@ def main():
     cfg_p = _write_lib_config(str(root_path), name, domain)
     print(f"  [ok] {cfg_p}")
 
-    # 4. registry entry
-    if patch_registry(name, str(root_path), collection):
-        print(f"  [ok] _KB_REGISTRY patched in {KB_CONFIG}")
-        print(f"       >>> commit this change: cd {CODE_ROOT} && git add -A && git commit")
+    # 4. write the collection name into the library's own config.json
+    #    (per-library value, NOT in bib_rag source — source stays generic).
+    cfg_path = root_path / "config.json"
+    if cfg_path.exists():
+        try:
+            _data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            _data = {}
+        _data.setdefault("settings", {})["collection"] = collection
+        cfg_path.write_text(_json.dumps(_data, indent=2, ensure_ascii=False) + "\n",
+                            encoding="utf-8")
+        print(f"  [ok] collection '{collection}' written to {cfg_path}")
     else:
-        print(f"  [--] registry already had '{name}'")
+        print(f"  [!!] no config.json for collection write: {cfg_path}")
 
-    # 5. wrapper
+    # 5. wrapper — the registration mechanism (exports KB name/root/collection)
     do_wrapper = args.wrapper
     if do_wrapper == "ask" and not args.no_interactive:
         do_wrapper = input(f"  Emit wrapper {WRAPPER_DIR}/{name}-rag? [Y/n]: ").strip().lower() or "yes"
@@ -248,9 +205,9 @@ def main():
 
     # 6. verify resolution
     print("\n=== Verify ===")
-    os_env_note = ""
     print(f'  Try: {name[:-4] if name.endswith("_rag") else name}-rag src/query_bib_rag.py "test query"')
-    print(f'  Or:  BIB_RAG_KB_NAME={name} <cmd>')
+    print(f'  Or:  BIB_RAG_KB_NAME={name} BIB_RAG_ROOT={root_path} BIB_RAG_COLLECTION={collection} <cmd>')
+    print("  (no bib_rag source was modified; library resolves via its own folder + wrapper)")
     print("\nNext steps (see GUIDE.md):")
     print(f"  1. Put PDFs somewhere durable, convert to md (pymupdf4llm)")
     print(f"  2. {(name[:-4] if name.endswith('_rag') else name)}-rag src/index_single_paper.py <file.md>   # single paper")

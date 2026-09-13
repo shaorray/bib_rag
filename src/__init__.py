@@ -12,8 +12,9 @@ src/ on sys.path) — modules use the dual-import pattern:
 
 Libraries (data folders: chroma_db_new/, parent_store/, md/, ...) are NOT
 part of the package. They live as siblings of the repo clone under
-BIB_RAG_HOME and are resolved by kb_config.py (registry + BIB_RAG_KB_NAME /
-BIB_RAG_ROOT / --kb flag).
+BIB_RAG_HOME and are resolved by kb_config.py from their own folder +
+wrapper (BIB_RAG_ROOT / BIB_RAG_KB_NAME / BIB_RAG_COLLECTION env + each
+library's config.json) — the toolkit source holds no per-library registry.
 
 Entry points (see README):
     bibrag            — console-script dispatcher for all subcommands

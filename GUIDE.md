@@ -60,18 +60,22 @@ One command does all of:
    `parent_store_disabled/`, `data/`, `outputs/`, `md/`
 2. Writes `LIBRARY.md` (manifest) + `CONTEXT.md` (domain glossary starter)
    + `config.json` (per-library machine/model settings — local classify model,
-   BibTeX path, tmpdir, domain topic seeds. Resolution: env var > config.json
-   > toolkit default. Never put secrets in it.)
-3. Registers the library in `src/kb_config.py` (`_KB_REGISTRY`: root + collection,
-   brace-counted patch with post-write sanity checks — cannot clobber the file)
-4. Emits a `neuro-rag` wrapper in `~/.local/bin/` (name = library name minus `_rag`)
+   BibTeX path, tmpdir, domain topic seeds, and the Chroma `collection` name.
+   Resolution: env var > config.json > toolkit default. Never put secrets in it.)
+3. Writes the Chroma collection name into the library's OWN `config.json`
+   (the toolkit source stays generic — it holds no per-library registry)
+4. Emits a `neuro-rag` wrapper in `~/.local/bin/` (name = library name minus
+   `_rag`). The wrapper is the library's "registration": it exports
+   `BIB_RAG_KB_NAME`, `BIB_RAG_ROOT`, `BIB_RAG_COLLECTION` so tools resolve
+   to this library with no code edit.
 
 Naming rule: library names are `snake_case` ending in `_rag`.
-The Chroma collection defaults to `<stem>_papers` (neuro_papers).
+The Chroma collection defaults to `<stem>_papers` (neuro_papers) unless you
+set `collection` in the library's `config.json` (needed for a library whose
+collection predates the convention, e.g. eph_rag uses `bib_rag_papers`).
 
 Safety: the script refuses to touch a directory that holds real data without a
-LIBRARY.md, and aborts rather than corrupting kb_config.py if the patch would
-drop any function. Re-running a failed scaffold resumes cleanly.
+LIBRARY.md. Re-running a failed scaffold resumes cleanly.
 
 ## Prerequisites (shared services, one-time)
 
@@ -158,8 +162,9 @@ daily at 09:00 appending to a log:
 
 Libraries are plain folders — `mv` / `tar` / `rsync` as a unit. `config.json`
 (machine/model settings) travels inside the folder, so bindings survive the move.
-After moving, update one registry line in `src/kb_config.py` (root path) and the
-wrapper's `BIB_RAG_ROOT` default. Nothing else references the old location.
+After moving, update the wrapper's `BIB_RAG_ROOT` default (or just re-run
+setup_library.py against the new path). Nothing in the toolkit source hardcodes
+a library location.
 
 ## Troubleshooting
 

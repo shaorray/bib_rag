@@ -1,32 +1,46 @@
 #!/usr/bin/env python3
 """
 kb_config.py — Shared configuration for the RAG toolkit (code) + knowledge-base
-stores (data). Architecture (2026-08-27):
+stores (data). Generic, library-agnostic.
 
     <RAG home>/bib_rag/        CODE  — src/, scripts/, docs/ (this repo)
     <RAG home>/<name>_rag/     DATA  — one folder per domain library
 
-The RAG home defaults to the parent directory of this repo (so sibling
-library folders are found wherever the toolkit is cloned) and can be moved
-with BIB_RAG_HOME.
+A "library" = a data directory that is self-describing (its own
+chroma_db_new/, parent_store/, data/, outputs/, CONTEXT.md, LIBRARY.md,
+config.json). The tool code is SHARED and holds NO library-specific binding
+(no registry of name → root/collection, no default-library name, no
+machine path). Every library resolves entirely from:
 
-A "library" = a data directory that is self-describing (its own chroma_db_new/,
-parent_store/, data/, outputs/, CONTEXT.md, LIBRARY.md). The tool code is
-shared; adding a new library never touches code beyond one registry line.
+  - environment (its ~/.local/bin/<stem>-rag wrapper, or explicit exports), and
+  - its own <root>/config.json ("settings" block).
 
 Resolution (highest wins):
-  1. BIB_RAG_ROOT       — explicit data-root override
-  2. BIB_RAG_KB_NAME    — registry lookup (also accepts --kb flag)
-  3. legacy: "bib_rag" name still resolves to eph_rag (deprecated alias)
-  4. default: eph_rag
+
+  data root:
+    1. BIB_RAG_ROOT env           — explicit data-root override
+    2. <BIB_RAG_HOME>/<BIB_RAG_KB_NAME>   — convention (default layout)
+    if neither is set: RuntimeError (fail loudly; never guess a default library)
+
+  collection name:
+    1. BIB_RAG_COLLECTION env     — explicit override
+    2. <root>/config.json settings.collection  — per-library value (authoritative
+       for e.g. eph_rag whose Chroma collection predates the "_papers" convention)
+    3. <BIB_RAG_KB_NAME minus _rag>_papers     — convention fallback
 
 Env vars:
-  BIB_RAG_KB_NAME     eph_rag (default) | geo_rag | ...
-  BIB_RAG_ROOT        explicit library/data root (overrides registry)
-  BIB_RAG_COLLECTION  collection name override (default comes from registry)
+  BIB_RAG_KB_NAME     library stem, e.g. eph_rag | geo_rag | prompt_rag
+  BIB_RAG_HOME        dir that holds the *_rag/ library folders
+  BIB_RAG_ROOT        explicit library/data root (wins over the convention)
+  BIB_RAG_COLLECTION  collection name override
   BIB_RAG_CODE_ROOT   override the tool-code root (default: parent of src/)
+
+To add a library: create its folder (see scripts/setup_library.py), set the
+collection (if non-conventional) in its config.json, and emit a wrapper that
+exports BIB_RAG_KB_NAME/BIB_RAG_ROOT/BIB_RAG_COLLECTION. No code edit.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -37,63 +51,17 @@ _CODE_ROOT = os.environ.get(
     "BIB_RAG_CODE_ROOT",
     str(Path(__file__).resolve().parent.parent))
 
-# ─── Named library registry ────────────────────────────────────────────────
-# Each entry: data root + canonical collection name. Adding a library = adding
-# one entry here (or setting BIB_RAG_ROOT/BIB_RAG_COLLECTION directly, or
-# running scripts/setup_library.py which patches this dict).
-#
-# Root defaults derive from BIB_RAG_HOME (default: the directory containing
-# this repo) so a cloned toolkit finds its sibling libraries anywhere:
-#   <BIB_RAG_HOME>/<name>/  e.g. <BIB_RAG_HOME>/eph_rag/
-# INSTALLED-package fallback: when the toolkit is pip-installed (not a repo
-# checkout / editable install), parent-of-package lands inside
-# site-packages — no libraries live there. Detect that (neither eph_rag/
-# nor geo_rag/ exists) and fall back to the canonical install location.
-# BIB_RAG_HOME always wins over both.
+# ─── RAG home ──────────────────────────────────────────────────────────────
+# Dir that contains the *_rag/ library folders. Defaults to the parent of this
+# repo (so a cloned toolkit finds its sibling libraries anywhere). Override
+# with BIB_RAG_HOME. No machine-specific fallback lives in source.
 _DERIVED_RAG_HOME = Path(__file__).resolve().parent.parent.parent
-
-def _resolve_rag_home() -> Path:
-    env_home = os.environ.get("BIB_RAG_HOME")
-    if env_home:
-        return Path(env_home)
-    # repo-checkout / editable-install layout: sibling library folders exist
-    if (_DERIVED_RAG_HOME / "eph_rag").is_dir() or \
-       (_DERIVED_RAG_HOME / "geo_rag").is_dir():
-        return _DERIVED_RAG_HOME
-    # pip-installed package (site-packages) — no sibling libraries; use the
-    # canonical data location next to the original install root.
-    return Path("/Disk_bot/RAG")
-
-_RAG_HOME = _resolve_rag_home()
-
-_KB_REGISTRY = {
-    "eph_rag": {
-        "root": str(_RAG_HOME / "eph_rag"),
-        "collection": "bib_rag_papers",   # historical name, kept for the existing 470K chunks
-    },
-    "geo_rag": {
-        "root": str(_RAG_HOME / "geo_rag"),
-        "collection": "geo_rag_papers"
-    }
-}
-
-# Legacy aliases (deprecated, print a warning once)
-_LEGACY_ALIASES = {
-    "bib_rag": "eph_rag",
-}
-_WARNED = set()
+_RAG_HOME = os.environ.get("BIB_RAG_HOME") or str(_DERIVED_RAG_HOME)
 
 
 def get_kb_name() -> str:
-    """Active library name; 'bib_rag' is accepted as a deprecated alias for eph_rag."""
-    name = os.environ.get("BIB_RAG_KB_NAME", "eph_rag")
-    if name in _LEGACY_ALIASES and name not in _WARNED:
-        _WARNED.add(name)
-        import sys
-        print(f"[kb_config] WARNING: '{name}' is deprecated, use '{_LEGACY_ALIASES[name]}'",
-              file=sys.stderr)
-        name = _LEGACY_ALIASES[name]
-    return name
+    """Active library stem (e.g. 'eph_rag'). Required unless BIB_RAG_ROOT is set."""
+    return os.environ.get("BIB_RAG_KB_NAME") or ""
 
 
 def get_code_root() -> str:
@@ -101,28 +69,52 @@ def get_code_root() -> str:
     return _CODE_ROOT
 
 
+def _read_collection_from_library_config(root: str) -> str:
+    """collection from <root>/config.json settings block; '' if absent."""
+    try:
+        data = json.loads(Path(root, "config.json").read_text(encoding="utf-8"))
+        s = data.get("settings", {})
+        return s.get("collection", "") if isinstance(s, dict) else ""
+    except Exception:
+        return ""
+
+
 def get_data_root() -> str:
     """Resolve the active library's data directory.
-    Priority: BIB_RAG_ROOT env > registry[name] > default eph_rag."""
+    Priority: BIB_RAG_ROOT env > <BIB_RAG_HOME>/<BIB_RAG_KB_NAME>.
+    Fails loudly (no silent default) if neither resolves.
+    """
     root = os.environ.get("BIB_RAG_ROOT")
     if root:
         return root
     name = get_kb_name()
-    if name in _KB_REGISTRY:
-        return _KB_REGISTRY[name]["root"]
-    return _KB_REGISTRY["eph_rag"]["root"]
+    if name and Path(_RAG_HOME, name).is_dir():
+        return str(Path(_RAG_HOME, name))
+    if name:
+        raise RuntimeError(
+            "kb_config: no data root for library %r. Expected it at %r "
+            "(does it exist?) or set BIB_RAG_ROOT explicitly."
+            % (name, str(Path(_RAG_HOME, name))))
+    raise RuntimeError(
+        "kb_config: no library selected. Export BIB_RAG_KB_NAME=<name> (or "
+        "BIB_RAG_ROOT=<root>), or run through the <name>-rag wrapper.")
 
 
 def get_collection_name() -> str:
     """Collection for the active library.
-    Priority: BIB_RAG_COLLECTION env > registry > 'bib_rag_papers' (eph default)."""
+    Priority: BIB_RAG_COLLECTION env > <root>/config.json settings.collection
+    > <BIB_RAG_KB_NAME minus _rag>_papers.
+    """
     env = os.environ.get("BIB_RAG_COLLECTION")
     if env:
         return env
+    root = get_data_root()
+    from_cfg = _read_collection_from_library_config(root)
+    if from_cfg:
+        return from_cfg
     name = get_kb_name()
-    if name in _KB_REGISTRY:
-        return _KB_REGISTRY[name].get("collection", "bib_rag_papers")
-    return "bib_rag_papers"
+    stem = name[:-4] if name.endswith("_rag") else name
+    return f"{stem}_papers"
 
 
 def get_config() -> dict:
@@ -161,7 +153,7 @@ def get_kb_root() -> str:
 # ─── Convenience: CLI --kb flag support ────────────────────────────────────
 def parse_kb_arg(argv=None) -> list:
     """
-    Scan argv for --kb <name> or --kb=<name> and set env accordingly.
+    Scan argv for --kb <name> or --kb=<name> and set BIB_RAG_KB_NAME accordingly.
     Returns the remaining argv (with --kb stripped).
     """
     import sys
@@ -180,17 +172,6 @@ def parse_kb_arg(argv=None) -> list:
         else:
             remaining.append(argv[i])
             i += 1
-
-    # Auto-resolve root+collection from the registry if not explicitly set
-    name = os.environ.get("BIB_RAG_KB_NAME", "eph_rag")
-    if name in _LEGACY_ALIASES:
-        name = _LEGACY_ALIASES[name]
-        os.environ["BIB_RAG_KB_NAME"] = name
-    if "BIB_RAG_ROOT" not in os.environ and name in _KB_REGISTRY:
-        os.environ["BIB_RAG_ROOT"] = _KB_REGISTRY[name]["root"]
-    if "BIB_RAG_COLLECTION" not in os.environ and name in _KB_REGISTRY:
-        os.environ["BIB_RAG_COLLECTION"] = _KB_REGISTRY[name]["collection"]
-
     return remaining
 
 
