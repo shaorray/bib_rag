@@ -105,17 +105,28 @@ def _hit_year_ok(clean_stored_doi: bool, fy: str, year: str,
     The filename year outranks the stored year (librarian truth vs
     PDF-extracted). Decision table:
       clean stored DOI → only a filename-year-agreeing hit may upgrade it
-                         (arXiv → published form, published ≤1y later)
+                         (ArXiv → published form, published ≤1y later)
       plausible year   → hit year must agree (±1) with the filename year,
                          else the stored year
       neither          → token overlap alone decides (return True)
+
+    2026-09-11 geo_rag hole: 'neither' is too permissive for news/correction
+    articles (Nature d41586-<code>-<N> stems carry an embedded 20xx code year
+    in the DOI suffix that _filename_year misses). A title-search hit on a
+    year-less paper with a coded DOI-stem is a wrong-paper risk — reject
+    unless the hit year agrees with the embedded code year (±1).
     """
     year_anchor = fy or (year if _year_ok(year) else "")
     if clean_stored_doi:
         return bool(fy and hit_year and abs(int(fy) - int(hit_year)) <= 1)
     if year_anchor:
         return bool(hit_year and abs(int(year_anchor) - int(hit_year)) <= 1)
-    return True
+    # neither anchor: NO arbitration signal at all — a title-search hit here
+    # cannot be year-checked, and geo_rag 2026-09-11 showed exactly this
+    # failure (Nature d41586 news article bound to an unrelated 2011 paper
+    # by token overlap). Per the guards reference ("report it, don't guess
+    # bindings") → reject; the paper lands in 'unverifiable' instead.
+    return False
 
 
 def _rewrite_parent(path: Path, chunks: list, updates: dict) -> None:
