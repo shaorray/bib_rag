@@ -2,10 +2,12 @@
 Routing logic for the bib_rag agentic graph.
 
 Provides edge routing functions for both the main graph and the agent subgraph.
-Adapted from the reference implementation for bib_rag's ChromaDB + llama-server setup.
+Backends: vLLM (:5015, Qwen3.8-27B AWQ), llama-server GGUF slots, or a cloud
+gateway (:11434) — routing itself is backend-agnostic.
 """
 
 from typing import Literal
+import os
 from langgraph.types import Send
 
 from .agent_schemas import State, AgentState
@@ -33,13 +35,35 @@ def route_after_rewrite(state: State) -> list:
         # "hyde" on the SUBGRAPH (must not collide with the parent State's
         # hydePassage channel — see AgentState).
         hyde = state.get("hydePassage", "") or ""
+        queries = list(state["rewrittenQuestions"])
+        # Map-Reduce concurrency control (multi-agent improvement):
+        #   Auto-routing (default, MR_MAX_PARALLEL unset): the rewrite LLM
+        #   classifies the query (QueryAnalysis.complexity). "simple" → the
+        #   rewrite node already collapsed to 1 query → single agent
+        #   (baseline-speed factual answering); "complex" → cap at 2, the
+        #   measured quality/cost optimum (2026-09-22 clean A/B: 2.5x ledger
+        #   claims at 1.8x wall). MR_MAX_PARALLEL env overrides the cap for
+        #   experimentation (1=serial baseline, 2=deep, 3+ measured negative
+        #   on single GPU: wall 168s vs 158s, weaker ledger signals).
+        #   Historical note: the original cap of 2 matched llama-server's
+        #   -np 2 slots; on vLLM (since 2026-09-21) --max-num-seqs 2 is the
+        #   real constraint.
+        try:
+            max_par = int(os.environ.get("MR_MAX_PARALLEL", "0"))
+        except ValueError:
+            max_par = 0
+        if max_par and max_par > 0:
+            queries = queries[:max_par]
+        elif state.get("queryComplexity", "complex") == "complex":
+            queries = queries[:2]
+        # simple → keep whatever survived (already 1 after the rewrite node).
         return [
             Send(
                 "agent",
                 {"question": query, "question_index": idx, "messages": [],
                  "hyde": hyde},
             )
-            for idx, query in enumerate(state["rewrittenQuestions"])
+            for idx, query in enumerate(queries)
         ]
 
 

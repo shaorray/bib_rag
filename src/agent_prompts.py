@@ -1,8 +1,8 @@
 """
 System prompts for the bib_rag agentic graph nodes.
 
-Adapted for the academic papers (Eph/ephrin) domain, using OpenAI-compatible
-API via llama-server (Qwen3.6-35B) instead of a small local model.
+Adapted for the academic papers (Eph/ephrin) domain. Backends: vLLM
+(:5015, Qwen3.8-27B AWQ), llama-server GGUF slots, or a cloud gateway.
 """
 
 
@@ -60,6 +60,18 @@ Rules:
      simple factual questions, keep ONE self-contained query.
    - Each sub-query must remain semantically equivalent to its part of the original
    - Do not expand, enrich, or reinterpret the meaning
+
+4b. Complexity classification (drives sub-agent fan-out):
+   - Set `complexity` to "simple" when the question has ONE answerable
+     facet: a definition, a single receptor/ligand interaction, a yes/no
+     factual question, one mechanism in one context. Then `questions`
+     MUST contain exactly 1 query (the rewritten original).
+   - Set `complexity` to "complex" when the question benefits from
+     multiple complementary retrieval angles: mechanism comparison
+     (e.g. "X vs Y"), pathway crosstalk, "review"/"overview" of a
+     signaling axis, contradictions, or explicit multi-part questions.
+     Decompose into 2 focused sub-questions (not 3-4 — measured cost/benefit
+     peak is 2 agents on a single-GPU backend).
 
 5. Hypothetical passage (hyde_passage):
    - ALSO write a short hypothetical document passage (2-3 sentences): the

@@ -50,6 +50,17 @@ class QueryAnalysis(BaseModel):
             "unclear."
         ),
     )
+    complexity: str = Field(
+        default="complex",
+        description=(
+            "Query complexity for routing: 'simple' = a single factual "
+            "question answerable by one focused retrieval pass (definition, "
+            "yes/no, single mechanism, single molecule); 'complex' = "
+            "multi-facet synthesis (mechanism comparison, pathway crosstalk, "
+            "contradictions across papers, review-style questions). Drives "
+            "sub-agent fan-out: simple → 1 agent, complex → 2."
+        ),
+    )
     clarification_needed: str = Field(
         description="Explanation of why the question needs clarification."
     )
@@ -70,6 +81,9 @@ class State(MessagesState):
     conversation_summary: str = ""
     originalQuery: str = ""
     rewrittenQuestions: List[str] = []
+    # Auto-routing: rewrite LLM's complexity verdict ("simple"/"complex").
+    # Default "complex" preserves legacy fan-out behavior when absent.
+    queryComplexity: str = "complex"
     # HyDE passage (QueryAnalysis.hyde_passage): fanned out to every agent
     # subgraph, consumed by the mandatory first search (appended to the
     # query so one embedding covers question + answer-shaped passage).

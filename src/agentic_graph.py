@@ -5,13 +5,15 @@ Builds a two-level graph architecture:
 1. Main graph: summarize_history → rewrite_query → [clarification?] → agent subgraphs → aggregate_answers
 2. Agent subgraph: orchestrator → tools → compress_context? → orchestrator (loop) → collect_answer
 
-Uses ChromaDB (bge-m3 embeddings) and OpenAI-compatible API via llama-server (Qwen3.6-35B).
+Uses ChromaDB (bge-m3 embeddings) and an OpenAI-compatible API: vLLM
+(:5015, Qwen3.8-27B AWQ, 262k ctx, fp8 KV), llama-server GGUF slots, or a
+cloud gateway (:11434).
 
 Usage:
     from src.agentic_graph import create_agent_graph
     from src.agent_tools import ToolFactory
 
-    llm = ChatOpenAI(base_url="http://localhost:5015/v1", model="qwen3.6-35b")
+    llm = ChatOpenAI(base_url="http://localhost:5015/v1", model="qwen38-27b-2x256k")
     factory = ToolFactory()
     tools = factory.create_tools()  # list of LangChain tools
     graph = create_agent_graph(llm, tools)

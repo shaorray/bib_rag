@@ -15,7 +15,7 @@ Usage:
 
 import os, sys
 import requests
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 # ─── Multi-KB config ─────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -46,13 +46,21 @@ def _budget(name: str, default: int) -> int:
 
 
 def _is_local_llm() -> bool:
-    """True when the LLM_URL/LLM_MODEL points at a local llama-server slot
-    (GGUF or :5015) — same detection as agent_nodes._resolve_limits. Local
-    slots are 4096 tokens (`-c 8192 -np 2`), so tool budgets must default
-    tighter than for cloud models with 32k+ windows."""
-    model = os.environ.get("LLM_MODEL", "")
-    llm_url = os.environ.get("LLM_URL", "")
-    return model.endswith(".gguf") or ":5015" in llm_url
+    """True for the *small-window* local path: llama-server GGUF slots only.
+
+    Single source of truth is agent_nodes.is_local_llm() (vLLM on :5015
+    serves a 262k fp8-KV window and follows the wide-window budget tier even
+    though it is local — it is intentionally NOT local). Kept as a thin
+    alias so the module-level budget defaults below stay readable; import
+    order caveat: agent_nodes resolves its limits at import time, but this
+    function calls the LIVE function, so it stays correct whenever env
+    changes after both modules are loaded.
+    """
+    try:  # package mode
+        from .agent_nodes import is_local_llm
+    except ImportError:  # flat (loose-script) mode
+        from agent_nodes import is_local_llm
+    return is_local_llm()
 
 
 RETRIEVE_PARENT_MAX_CHARS = _budget("RETRIEVE_PARENT_MAX_CHARS",

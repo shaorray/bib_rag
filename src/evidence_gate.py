@@ -35,7 +35,7 @@ _EMPTY_MARKERS = (
 )
 
 # Sentinel the tools emit when results exist but were clipped empty.
-_MIN_RESULTS = 1
+# (was: dead constant `_MIN_RESULTS = 1` — markers below carry the semantics.)
 
 # All queries from retrieval_keys 'search::<query>' entries (the dedup ledger
 # tracks every query the agent ran) — this is the complete retrieval history,

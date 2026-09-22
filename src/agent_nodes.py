@@ -3,7 +3,9 @@ Node functions for the bib_rag agentic graph.
 
 Adapted from the reference implementation for the bib_rag domain:
 - ChromaDB with bge-m3 embeddings instead of Qdrant
-- OpenAI-compatible API via llama-server (Qwen3.6-35B) instead of a small local model
+- OpenAI-compatible API: vLLM (:5015, Qwen3.8-27B AWQ, 262k ctx, fp8 KV) or
+  llama-server GGUF slots, or a fast cloud model via the OpenAI-compatible
+  gateway (:11434)
 - Academic papers on Eph/ephrin instead of general PDFs
 """
 
@@ -28,6 +30,10 @@ from .agent_prompts import (
 # calls per query or it times out; a fast cloud model (glm-5.2) can afford more.
 # Explicit env overrides always win:
 #   AGENT_MAX_ITERATIONS, AGENT_MAX_TOOL_CALLS
+# IMPORT-TIME RESOLUTION (both limits here and BASE_TOKEN_THRESHOLD below):
+# env vars must be set BEFORE `import agent_nodes`. Caveat: setting
+# AGENT_MAX_ITERATIONS<=4 also silently disables mid-loop compression
+# (should_compress_context early-outs at <=4).
 def _resolve_limits():
     # Each env override is honored independently; the unset one falls back to
     # a per-model-speed default.
@@ -45,18 +51,49 @@ def _resolve_limits():
     # model → conservative limits. Detect it by the .gguf suffix OR the local
     # llama-server port (:5015); cloud models are served through the
     # OpenAI-compatible gateway (localhost:11434) and are fast.
+    # vLLM on :5015 does continuous batching — same generous limits as the
+    # cloud tier. VLLM_SERVE=0 (llama-server back on :5015) restores the
+    # conservative slot path; VLLM_SERVE=1 forces the vLLM path.
+    serve = os.environ.get("VLLM_SERVE", "")
+    is_vllm_serve = serve == "1" or (serve != "0" and ":5015" in llm_url
+                                     and not model.endswith(".gguf"))
     is_local = model.endswith(".gguf") or ":5015" in llm_url
+    if is_local and is_vllm_serve:
+        return iters or 12, tools or 10   # vLLM continuous batching: fast
     if is_local:
-        return iters or 7, tools or 6   # slow local model: conservative, avoid timeout
+        return iters or 7, tools or 6   # llama-server slots: conservative, avoid timeout
     return iters or 12, tools or 10      # fast cloud model: generous
 
 
 MAX_ITERATIONS, MAX_TOOL_CALLS = _resolve_limits()
 
 
+def is_vllm() -> bool:
+    """True when :5015 serves vLLM (continuous batching, 262k window, fp8 KV)
+    rather than the llama-server GGUF slot path (-c 8192 -np 2 → 4k tokens/slot).
+
+    Detect via the VLLM_SERVE=1 env set by vllm_serve_qwen38.sh; fall back
+    to a non-gguf model name on :5015 (vLLM serves AWQ safetensors, never
+    .gguf). Env kill-switch: VLLM_SERVE=0 forces the llama-server budgets.
+    """
+    if os.environ.get("VLLM_SERVE") == "1":
+        return True
+    if os.environ.get("VLLM_SERVE") == "0":
+        return False
+    model = os.environ.get("LLM_MODEL", "")
+    llm_url = os.environ.get("LLM_URL", "")
+    return ":5015" in llm_url and not model.endswith(".gguf")
+
+
 def is_local_llm() -> bool:
-    """True when LLM_URL/LLM_MODEL points at a local llama-server slot
-    (GGUF path or :5015) — shared with agent_tools budget defaults."""
+    """True for the *slow, small-window* local path: llama-server GGUF slots.
+
+    vLLM on :5015 is local but fast with a 262k window — its budgets follow
+    the cloud tier, so it is intentionally NOT is_local_llm().
+    Shared with agent_tools budget defaults.
+    """
+    if is_vllm():
+        return False
     model = os.environ.get("LLM_MODEL", "")
     llm_url = os.environ.get("LLM_URL", "")
     return model.endswith(".gguf") or ":5015" in llm_url
@@ -167,11 +204,21 @@ def rewrite_query(state: State, llm):
 
     if response.questions and response.is_clear:
         delete_all = [RemoveMessage(id=m.id) for m in state["messages"] if not isinstance(m, SystemMessage)]
+        # Auto-routing: the rewrite LLM classifies complexity (simple=1
+        # facet / complex=multi-facet). Simple queries collapse to a single
+        # sub-question regardless of how many the model drafted — measured
+        # 2026-09-22: 1 agent ≈ 62-75s with 2.5x fewer verifiable claims than
+        # 2 agents; factual queries don't need the fan-out.
+        complexity = "simple" if (response.complexity or "").strip().lower() == "simple" else "complex"
+        questions = list(response.questions)
+        if complexity == "simple":
+            questions = questions[:1]
         return {
             "questionIsClear": True,
             "messages": delete_all,
             "originalQuery": last_message.content,
-            "rewrittenQuestions": response.questions,
+            "rewrittenQuestions": questions,
+            "queryComplexity": complexity,
             # HyDE probe: the hypothetical passage rides along to the agent
             # subgraphs via Send; each subgraph's mandatory first search
             # embeds question + passage jointly (answer-shaped text matches
@@ -602,6 +649,43 @@ def collect_answer(state: AgentState):
         guard_note = f"{prior_note}; {guard_note}"
     elif not guard_note and prior_note:
         guard_note = prior_note
+
+    # Layer-4 claim ledger (VB-style claim-evidence objects, zero-LLM):
+    # turn the answer's Sources section into explicit claims, validate each
+    # evidence pointer against this session's retrieval whitelist / tool
+    # trace / on-disk artifacts, and persist survivors to claim_ledger.jsonl.
+    # Kill-switch CLAIM_LEDGER=0; must never break answering.
+    if is_valid and os.environ.get("CLAIM_LEDGER", "1") != "0":
+        try:
+            from .claim_ledger import (build_claims_from_sources, validate_claims,
+                                       persist, messages_to_tool_events)
+            ledger_claims = build_claims_from_sources(answer)
+            if ledger_claims:
+                ledger_res = validate_claims(
+                    ledger_claims,
+                    retrieval_keys=state.get("retrieval_keys", set()) or set(),
+                    tool_events=messages_to_tool_events(list(state.get("messages") or [])),
+                    strict=False,  # answer-side: unresolved → warning, not error
+                )
+                if ledger_res.claims:
+                    persist(ledger_res.claims, session=str(
+                        state.get("question_index", "")))
+                n_v = sum(1 for c in ledger_res.claims
+                          if c["status_counts"]["verified"])
+                n_e = sum(1 for c in ledger_res.claims
+                          if c["status_counts"]["external"])
+                n_u = len(ledger_res.errors)
+                note = (f"[claim_ledger] {len(ledger_res.claims)} claim(s): "
+                        f"{n_v} verified, {len(ledger_res.claims) - n_v} external-only, "
+                        f"{n_u} unresolved")
+                guard_note = f"{guard_note}; {note}" if guard_note else note
+        except Exception as e:
+            # never break answering; surface integration failures
+            try:
+                from .hybrid_search import warn_post_fusion
+                warn_post_fusion(f"claim_ledger skipped ({type(e).__name__})")
+            except Exception:
+                pass
 
     return {
         "final_answer": answer,

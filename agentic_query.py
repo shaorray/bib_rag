@@ -27,6 +27,8 @@ _argv = parse_kb_arg()
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.errors import GraphInterrupt
+from typing import Any, Dict, Tuple
+import uuid
 
 from src.agentic_graph import create_agent_graph
 from src.agent_tools import create_tools
@@ -58,12 +60,26 @@ def create_llm():
     except ValueError:
         max_tokens = 2048 if model_name.endswith(".gguf") else 8192
 
+    # vLLM-served Qwen3.8 AWQ defaults to thinking mode, but this abliterated
+    # merge emits its thinking as bare tokens (no </think> tags), so the qwen3
+    # reasoning parser matches nothing: reasoning_content AND content both come
+    # back empty while the model burns the whole max_tokens budget in invisible
+    # deliberation → finish_reason=length → empty answer → agent fallback.
+    # Disabling thinking at the chat-template level makes every call
+    # answer-first (measured: 8192 wasted tokens → 1918, finish=stop).
+    # Env kill-switch: LLM_ENABLE_THINKING=1 restores thinking mode.
+    extra = {}
+    if (os.environ.get("LLM_ENABLE_THINKING", "0") != "1"
+            and "5015" in llm_url and not model_name.endswith(".gguf")):
+        extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+
     return ChatOpenAI(
         base_url=llm_url,
         model=model_name,
         api_key=api_key,
         temperature=0.1,
         max_tokens=max_tokens,
+        model_kwargs=extra,
     )
 
 
@@ -170,17 +186,47 @@ def invoke_with_interrupt_handling(
             }
 
 
+_GRAPH_CACHE: Dict[Tuple[str, str], Any] = {}
+
+
+def _get_cached_graph(llm, tools):
+    """Return a cached compiled graph for this (base_url, model) backend.
+
+    Compiling the two-level LangGraph (main graph + agent subgraph) costs
+    real time per query; a benchmark loop calling run_query() N times used
+    to recompile N times for the same backend. The cache key is the LLM
+    endpoint tuple — changing LLM_URL/LLM_MODEL between calls lands in a
+    different slot instead of silently reusing a stale client.
+
+    SAFETY: with a cached graph the InMemorySaver persists across calls, so
+    every run_query() call MUST use a fresh uuid4 thread_id (see config
+    below) — otherwise the agent_answers accumulate channel carries prior
+    answers into aggregate_answers' len==1 fast path (stale-answer bug,
+    verified in langgraph 1.1.3).
+    """
+    key = (getattr(llm, "openai_api_base", "") or "", getattr(llm, "model_name", "") or "")
+    graph = _GRAPH_CACHE.get(key)
+    if graph is None:
+        graph = create_agent_graph(llm, tools)
+        _GRAPH_CACHE[key] = graph
+    return graph
+
+
 def run_query(query: str, verbose: bool = False):
     """Run a single query through the agentic graph."""
     llm = create_llm()
     tools = create_tools()
-    graph = create_agent_graph(llm, tools)
+    graph = _get_cached_graph(llm, tools)
 
     if verbose:
         print(f"🔍 Query: {query}")
         print("=" * 70)
 
-    config = {"configurable": {"thread_id": "cli-thread-1"}}
+    # Cached graph ⇒ persistent InMemorySaver ⇒ fresh thread_id per call is
+    # MANDATORY (see _get_cached_graph docstring: fixed id + cached graph =
+    # stale-answer bug in the agent_answers accumulate channel).
+    config = {"configurable": {"thread_id": f"cli-{uuid.uuid4()}"}}
+
     try:
         result = invoke_with_interrupt_handling(
             graph,

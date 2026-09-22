@@ -28,3 +28,6 @@ bib_rag.egg-info/
 src/bib_rag.egg-info/
 dist/
 build/
+
+# Runtime ledgers (append-only local state, not source)
+claim_ledger.jsonl
