@@ -83,6 +83,7 @@ COMMANDS = {
     "bib": "src/bibtex_export.py",
     "grill": "src/bib_rag_writer.py",       # legacy alias → merged writer
     "writer": "src/bib_rag_writer.py",
+    "claims": "src/claim_ledger.py",        # VB-style claim-evidence ledger
 }
 
 

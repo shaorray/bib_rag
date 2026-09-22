@@ -60,10 +60,24 @@ def clean_text(text):
     return '\n'.join(cleaned)
 
 def truncate_at_references(text):
-    lines = text.split('\n'); cutoff = len(lines)
+    # Position-aware truncation (2026-09-18 fix):
+    #   strong triggers (REFERENCES/BIBLIOGRAPHY/LITERATURE CITED) truncate at the
+    #   first match anywhere. Weak triggers (ACKNOWLEDGMENTS/SUPPLEMENTARY/APPENDIX/
+    #   DATA AVAILABILITY/CONFLICT OF INTEREST/AUTHOR CONTRIBUTIONS) are trusted
+    #   ONLY in the last 40% of the document — page-1 blocks like nihms/
+    #   Cell-style "Author contributions" / "Conflict of interest" otherwise
+    #   truncate 90%+ of the paper (seen 2026-09-17 on 39693224 and again
+    #   2026-09-18 on 39196901).
+    lines = text.split('\n'); n = len(lines); cutoff = n
+    strong = re.compile(r'^#*\s*(REFERENCES?|BIBLIOGRAPHY|LITERATURE CITED)\s*$', re.I)
+    weak = re.compile(r'^#*\s*(ACKNOWLEDGMENTS?|SUPPLEMENTARY|SUPPLEMENTAL MATERIALS?|APPENDIX|DATA AVAILABILITY|CONFLICT OF INTEREST|AUTHOR CONTRIBUTIONS?)\s*$', re.I)
     for i, line in enumerate(lines):
-        if re.match(r'^#*\s*(REFERENCES?|BIBLIOGRAPHY|ACKNOWLEDGMENTS?|SUPPLEMENTARY|APPENDIX|DATA AVAILABILITY|CONFLICT OF INTEREST|AUTHOR CONTRIBUTIONS?)\s*$', line, re.I):
+        if strong.match(line):
             cutoff = i; break
+    if cutoff == n:
+        for i, line in enumerate(lines):
+            if weak.match(line) and i >= int(n * 0.6):
+                cutoff = i; break
     return '\n'.join(lines[:cutoff])
 
 def extract_meta(text, filename):

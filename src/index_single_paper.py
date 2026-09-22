@@ -141,6 +141,20 @@ def index_paper(md_path, meta_override=None):
         all_children.extend(children)
     print(f"  Children: {len(all_children)}")
 
+    # Global per-(source,section) ID counter (2026-09-18 fix): create_child_chunks
+    # resets idx per parent, so multiple parents sharing a section (e.g. 10x
+    # figure_caption) produce colliding {source}:{section}:idx{idx}:child IDs and
+    # chroma silently drops later ones. Number IDs across parents like the sweep
+    # importer (batch_index_vascdev2) does, and fail loudly on collision.
+    _ctr = {}
+    for c in all_children:
+        _ctr[(c['source'], c['section'])] = _ctr.get((c['source'], c['section']), 0)
+        c['id'] = f"{c['source']}:{c['section']}:idx{_ctr[(c['source'], c['section'])]}:child"
+        _ctr[(c['source'], c['section'])] += 1
+    if len({c['id'] for c in all_children}) != len(all_children):
+        print('❌ id_collision after global renumbering — refusing to index')
+        return False
+
     # Embed
     texts_to_embed = [c['text'] for c in all_children]
     print(f"  Embedding {len(texts_to_embed)} chunks via llama-server (port 8081)...")
@@ -176,7 +190,7 @@ def index_paper(md_path, meta_override=None):
                 'pmcid': meta.get('pmcid', ''),
                 'hash': hashlib.md5(cleaned.encode()).hexdigest()[:16]
             }],
-            ids=[f"{child['source']}:{child['section']}:idx{child['idx']}:child"]
+            ids=[child['id']]
         )
 
     # Update checkpoint
