@@ -77,7 +77,7 @@ def create_llm():
         base_url=llm_url,
         model=model_name,
         api_key=api_key,
-        temperature=0.1,
+        temperature=float(os.environ.get("AGENTIC_TEMPERATURE", "0.1")),
         max_tokens=max_tokens,
         model_kwargs=extra,
     )

@@ -27,6 +27,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import ToolNode
 from functools import partial
 
+from . import agent_nodes as nodes
 from .agent_schemas import State, AgentState
 from .agent_nodes import (
     summarize_history,
@@ -38,6 +39,7 @@ from .agent_nodes import (
     compress_context,
     collect_answer,
     aggregate_answers,
+    empty_retrieval_refusal,
 )
 from .agent_edges import route_after_rewrite, route_after_orchestrator_call, route_after_collect
 
@@ -76,8 +78,24 @@ def create_agent_graph(llm, tools_list):
     )
     agent_builder.add_node(should_compress_context)
     agent_builder.add_node(collect_answer)
-
-    agent_builder.add_edge(START, "orchestrator")
+    # Feature 1 (empty-retrieval refusal): this passthrough covers EVERY
+    # incoming edge of `orchestrator` (START, post-tools loop, post-compress
+    # resume, citation-guard redirect) — when the zero-LLM evidence gate sees
+    # retrieval attempted but zero evidence, it skips the orchestrator LLM
+    # call entirely and routes to fallback_response.
+    #
+    # Command-routing constraint: a node whose callable emits Command(goto=...)
+    # must register NO static/conditional edges — LangGraph fans out to BOTH
+    # the goto target and every registered edge target. Hence:
+    #   - should_compress_context has no registered edges; the two Command
+    #     gotos in agent_nodes are retargeted to this passthrough via
+    #     ORCH_INJECT_NODE.
+    #   - the passthrough itself emits only Command(goto=...) — no edges out.
+    nodes.ORCH_INJECT_NODE = "empty_retrieval_refusal"
+    agent_builder.add_node(empty_retrieval_refusal)
+    agent_builder.add_edge(START, "empty_retrieval_refusal")
+    agent_builder.add_edge("tools", "should_compress_context")
+    agent_builder.add_edge("compress_context", "empty_retrieval_refusal")
     agent_builder.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator_call,
@@ -87,8 +105,6 @@ def create_agent_graph(llm, tools_list):
             "collect_answer": "collect_answer",
         },
     )
-    agent_builder.add_edge("tools", "should_compress_context")
-    agent_builder.add_edge("compress_context", "orchestrator")
     agent_builder.add_edge("fallback_response", "collect_answer")
     agent_builder.add_conditional_edges(
         "collect_answer",

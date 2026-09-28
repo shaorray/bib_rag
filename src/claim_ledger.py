@@ -356,6 +356,48 @@ def extract_claim_refs(answer: str) -> List[str]:
     return sorted(set(CLAIM_REF_RE.findall(answer)))
 
 
+# ── Numeric claim re-check (Feature 2 / governance checklist L3) ─────────
+
+NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+# forms like 2-fold / 3.5-fold — capture the numeric head
+FOLD_RE = re.compile(r"(\d+(?:\.\d+)?)\s*-?\s*(?:fold|×|x)\b", re.IGNORECASE)
+YEAR_RE = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
+
+
+def claim_numbers(text: str) -> List[str]:
+    """Numeric tokens a claim asserts: integers/decimals (thousand-separators
+    stripped), percentages, fold-changes (numeric head only), and years."""
+    t = text.replace(",", "")  # strip thousands separators
+    out = {m.group(1) if m.group(1) else m.group(0)
+           for m in FOLD_RE.finditer(t)}
+    out.update(NUM_RE.findall(t))
+    return sorted(out)
+
+
+def numeric_mismatch(claim_text: str, evidence_texts: List[str],
+                     source_years: Optional[List[int]] = None) -> Optional[str]:
+    """Reason string when a numeric claim is unsupported by its evidence.
+
+    A claim containing numbers is only as good as its numbers: at least one
+    number must appear verbatim (after thousand-separator stripping) in the
+    cited chunk texts / evidence quotes. A year matching the cited source's
+    publication year counts as supporting (citation-of-record, not a fact).
+    Claims without numbers are never mismatched — returns None.
+    """
+    nums = claim_numbers(claim_text)
+    if not nums:
+        return None
+    hay = [(t or "").replace(",", "") for t in evidence_texts if t]
+    if source_years:
+        hay.extend(str(y) for y in source_years)
+    for n in nums:
+        # boundary-aware: '10' must not match inside '100' or '2010'
+        pat = re.compile(rf"(?<![\d.]){re.escape(n)}(?!\d)")
+        if any(pat.search(h) for h in hay):
+            return None
+    return "numeric-mismatch"
+
+
 def build_claims_from_sources(answer: str, max_claims: int = 30) -> List[dict]:
     """Turn an answer's Sources section into claim objects (best-effort).
 

@@ -121,10 +121,13 @@ def coverage_block(coverage: Dict) -> str:
     """The mandatory transparency block appended to fallback answers."""
     lines: List[str] = []
     if coverage.get("no_evidence"):
+        # Exact phrase "no literature supporting" is a contract: the Feature 3
+        # empty-refusal scorer matches on it — do not reword.
         lines.append(
             "**Evidence coverage:** No retrieval in this session returned "
-            "usable results — the answer below reflects only weak/partial "
-            "signals; treat it as ungrounded."
+            "usable results — there is no literature supporting the question "
+            "in this knowledge base; the answer below reflects only "
+            "weak/partial signals; treat it as ungrounded."
         )
     elif coverage.get("queries") and coverage.get("n_results_total", 0) == 0:
         lines.append(
@@ -139,10 +142,14 @@ def gap_instruction(coverage: Dict) -> str:
     """Extra instruction injected INTO the fallback prompt (not the answer)
     forcing explicit reporting of unanswerable aspects."""
     if coverage.get("no_evidence"):
+        # Exact phrase "no literature supporting" is a contract: the Feature 3
+        # empty-refusal scorer matches on it — do not reword.
         return (
             "EVIDENCE GATE: NO retrieval in this session returned usable "
-            "results. You must state this explicitly and list what kinds of "
-            "sources would be needed, instead of presenting an answer."
+            "results. There is no literature supporting this question in the "
+            "knowledge base. You must state this explicitly — say that no "
+            "literature supporting the question was found, list what kinds "
+            "of sources would be needed, instead of presenting an answer."
         )
     if coverage.get("empty_queries"):
         return (

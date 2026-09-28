@@ -11,6 +11,7 @@ Adapted from the reference implementation for the bib_rag domain:
 
 from typing import Literal, Set
 import os
+import re
 from langchain_core.messages import SystemMessage, HumanMessage, RemoveMessage, AIMessage, ToolMessage
 from langgraph.types import Command
 
@@ -66,6 +67,14 @@ def _resolve_limits():
 
 
 MAX_ITERATIONS, MAX_TOOL_CALLS = _resolve_limits()
+
+# Name of the node that wraps/intercepts every orchestrator entry. The graph
+# builder (agentic_graph.py) MAY override this to its own passthrough node —
+# the two Command gotos in should_compress_context must target it so the
+# empty-retrieval refusal gate sees the post-tools state too (a node emitting
+# Command(goto=...) must register NO static edges: LangGraph fans out to both
+# targets otherwise).
+ORCH_INJECT_NODE = "orchestrator"
 
 
 def is_vllm() -> bool:
@@ -399,6 +408,33 @@ def fallback_response(state: AgentState, llm):
     return {"messages": [AIMessage(content=answer)]}
 
 
+def empty_retrieval_refusal(state: AgentState) -> Command[Literal["fallback_response", "orchestrator"]]:
+    """Deterministic pre-orchestrator gate: refuse to spend an orchestrator
+    LLM call when every retrieval already returned nothing (Feature 1).
+
+    Covers EVERY incoming edge of `orchestrator` (START, post-tools loop,
+    post-compress resume, citation-guard redirect): when the zero-LLM
+    evidence gate reports at least one attempted retrieval and zero
+    evidence, route straight to fallback_response — its EVIDENCE GATE
+    prompt instruction + coverage block produce the "no literature
+    supporting" refusal. Env kill-switch: BIB_RAG_EMPTY_REFUSAL=0.
+    """
+    if os.environ.get("BIB_RAG_EMPTY_REFUSAL", "1") != "0":
+        try:
+            from .evidence_gate import evidence_coverage
+            coverage = evidence_coverage(
+                state.get("messages") or [], state.get("retrieval_keys", set()))
+            if coverage.get("no_evidence"):
+                return Command(goto="fallback_response", update={})
+        except Exception as e:  # the gate must never break the graph loop
+            from .hybrid_search import warn_post_fusion
+            warn_post_fusion(f"empty-retrieval refusal skipped ({type(e).__name__})")
+    # update={} is REQUIRED: a bare Command(goto=...) would still be treated
+    # as a state update AND a routing decision — with any registered static
+    # edge on this node LangGraph fans out to BOTH targets in one step.
+    return Command(goto="orchestrator", update={})
+
+
 def should_compress_context(state: AgentState) -> Command[Literal["compress_context", "orchestrator"]]:
     """Check if context needs compression.
 
@@ -460,7 +496,8 @@ def should_compress_context(state: AgentState) -> Command[Literal["compress_cont
     # evidence directly. Only compress when the loop is long enough to
     # re-prefill the accumulated context many times.
     if MAX_ITERATIONS <= 4:
-        return Command(update={"retrieval_keys": updated_ids}, goto="orchestrator")
+        return Command(update={"retrieval_keys": updated_ids},
+                       goto=ORCH_INJECT_NODE)
 
     current_token_messages = estimate_context_tokens(messages)
     current_token_summary = estimate_context_tokens(
@@ -470,7 +507,7 @@ def should_compress_context(state: AgentState) -> Command[Literal["compress_cont
 
     max_allowed = BASE_TOKEN_THRESHOLD + int(current_token_summary * TOKEN_GROWTH_FACTOR)
 
-    goto = "compress_context" if current_tokens > max_allowed else "orchestrator"
+    goto = "compress_context" if current_tokens > max_allowed else ORCH_INJECT_NODE
     return Command(update={"retrieval_keys": updated_ids}, goto=goto)
 
 
@@ -668,6 +705,48 @@ def collect_answer(state: AgentState):
                     strict=False,  # answer-side: unresolved → warning, not error
                 )
                 if ledger_res.claims:
+                    # Feature 2a: numeric re-check — a claim asserting numbers
+                    # must find at least one of them in its cited evidence
+                    # (chunk text via the parent store, or the evidence note
+                    # quoting the body). Mismatch → downgrade to 'weak' +
+                    # mark evidence 'unresolved' reason 'numeric-mismatch'.
+                    try:
+                        from .claim_ledger import claim_numbers, numeric_mismatch
+                        from .citation_guard import load_parent_text
+                        parent_ids = {e.get("parent_id", "") for c in ledger_res.claims
+                                      for e in c.get("evidence", [])
+                                      if isinstance(e, dict) and e.get("parent_id")}
+                        ptext = {}
+                        for pid in parent_ids:
+                            try:
+                                ptext[pid] = load_parent_text(pid)
+                            except Exception:
+                                ptext[pid] = ""
+                        for c in ledger_res.claims:
+                            evs = [e for e in c.get("evidence", []) if isinstance(e, dict)]
+                            ev_texts = [ptext.get(e.get("parent_id", ""), "")
+                                        for e in evs]
+                            ev_texts += [e.get("note", "") or "" for e in evs]
+                            yrs = []
+                            for e in evs:
+                                ym = re.search(r"\b(1[5-9]\d{2}|20\d{2})\b",
+                                               str(e.get("title", "")) or "")
+                                if ym:
+                                    yrs.append(int(ym.group(1)))
+                            reason = numeric_mismatch(c["text"], ev_texts, yrs)
+                            if reason:
+                                c["confidence"] = "weak"
+                                for e in evs:
+                                    e["verified"] = False
+                                    e["status"] = "unresolved"
+                                    e["reason"] = reason
+                                sc = c["status_counts"]
+                                sc["unresolved"] = sc.get("verified", 0) + sc.get("external", 0)
+                                sc["verified"] = 0
+                                sc["external"] = 0
+                    except Exception as e2:
+                        from .hybrid_search import warn_post_fusion
+                        warn_post_fusion(f"numeric recheck skipped ({type(e2).__name__})")
                     persist(ledger_res.claims, session=str(
                         state.get("question_index", "")))
                 n_v = sum(1 for c in ledger_res.claims
@@ -679,6 +758,39 @@ def collect_answer(state: AgentState):
                         f"{n_v} verified, {len(ledger_res.claims) - n_v} external-only, "
                         f"{n_u} unresolved")
                 guard_note = f"{guard_note}; {note}" if guard_note else note
+                # Feature 2b: surface claims whose evidence is entirely
+                # unresolved (incl. numeric-mismatch) before the Sources
+                # section — kill-switch BIB_RAG_UNVERIFIED_SURFACING=0.
+                try:
+                    def _statuses(e):
+                        if not isinstance(e, dict):
+                            return ("verified",)
+                        if e.get("reason") == "numeric-mismatch":
+                            return ("unresolved",)
+                        st = e.get("status")
+                        if st:
+                            return (st,)
+                        return ("verified",) if e.get("verified") else ("unresolved",)
+                    unverified = [c for c in ledger_res.claims
+                                  if all(s == "unresolved" or s == "external"
+                                         for e in c.get("evidence", [])
+                                         for s in _statuses(e))
+                                  and any(s == "unresolved"
+                                          for e in c.get("evidence", [])
+                                          for s in _statuses(e))]
+                    if (unverified and ledger_res.claims
+                            and os.environ.get("BIB_RAG_UNVERIFIED_SURFACING",
+                                               "1") != "0"
+                            and "**Sources:**" in answer):
+                        block = ("\n\n⚠ Unverified claims "
+                                 f"({len(unverified)}):\n" + "\n".join(
+                                     f"- {c['text'][:120]}"
+                                     for c in unverified))
+                        answer = answer.replace("**Sources:**",
+                                                block + "\n\n**Sources:**", 1)
+                except Exception as e3:
+                    from .hybrid_search import warn_post_fusion
+                    warn_post_fusion(f"unverified-surfacing skipped ({type(e3).__name__})")
         except Exception as e:
             # never break answering; surface integration failures
             try:
