@@ -69,7 +69,10 @@ def truncate_at_references(text):
     #   truncate 90%+ of the paper (seen 2026-09-17 on 39693224 and again
     #   2026-09-18 on 39196901).
     lines = text.split('\n'); n = len(lines); cutoff = n
-    strong = re.compile(r'^#*\s*(REFERENCES?|BIBLIOGRAPHY|LITERATURE CITED)\s*$', re.I)
+    # 2026-09-25: also accept bold-markdown headers ("**References**") which
+    # pymupdf4llm emits for OUP-style PDFs - bare \s* failed to match and the
+    # reference list survived truncation (seen on dfaf015 / Microscopy 2025).
+    strong = re.compile(r'^#*\s*\*{0,2}\s*(REFERENCES?|BIBLIOGRAPHY|LITERATURE CITED)\s*\*{0,2}\s*$', re.I)
     weak = re.compile(r'^#*\s*(ACKNOWLEDGMENTS?|SUPPLEMENTARY|SUPPLEMENTAL MATERIALS?|APPENDIX|DATA AVAILABILITY|CONFLICT OF INTEREST|AUTHOR CONTRIBUTIONS?)\s*$', re.I)
     for i, line in enumerate(lines):
         if strong.match(line):
@@ -114,7 +117,10 @@ def extract_sections(text):
     patterns = {
         'abstract': r'^#*\s*(ABSTRACT|SUMMARY)\s*$',
         'introduction': r'^#*\s*(INTRODUCTION|BACKGROUND)\s*$',
-        'methods': r'^#*\s*(METHODS?|MATERIALS?|EXPERIMENTAL)\s*',
+        # 2026-09-25: anchor at end - the unanchored prefix match used to fire on
+        # wrapped reference-list lines (e.g. "experimental study. Med Image Anal..."),
+        # discarding the entire body before the first header (seen on dfaf015).
+        'methods': r'^#*\s*(METHODS?|MATERIALS?|EXPERIMENTAL)[\s\-]*(and[\s\-]*(methods|materials|procedures|design)|(procedures|design|methods))?\s*$',
         'results': r'^#*\s*(RESULTS?|FINDINGS?)\s*$',
         'discussion': r'^#*\s*DISCUSSION\s*$',
         'conclusion': r'^#*\s*CONCLUSIONS?\s*$',
