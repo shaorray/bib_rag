@@ -166,6 +166,26 @@ def test_all_refusal_markers_recognized():
         assert ef.has_refusal_marker(f"Unfortunately, {marker} here.")
 
 
+def test_low_confidence_exposure_only_truly_unresolved():
+    # confidence is 'weak' by default on every built claim, so the metric must
+    # instead measure claims whose evidence is entirely unresolved.
+    good = {"id": "c1", "text": "supported claim",
+            "evidence": [{"kind": "chunk", "parent_id": "p1"}]}
+    bad = {"id": "c2", "text": "unsupported claim",
+           "evidence": [{"kind": "chunk", "parent_id": "pX",
+                         "reason": "numeric-mismatch"}]}
+    hall, weak, n = ef.score_claims([good, bad], {"parent::p1"}, [])
+    assert n == 2
+    assert weak == pytest.approx(0.5)
+    # external-only claim is NOT exposed (citation-of-record is legit signal)
+    ext = {"id": "c3", "text": "cited claim",
+           "evidence": [{"kind": "citation", "pmid": "12345678"}]}
+    _, weak_ext, _ = ef.score_claims([ext], set(), [])
+    assert weak_ext == 0.0
+    for marker in ef.REFUSAL_MARKERS:
+        assert ef.has_refusal_marker(f"Unfortunately, {marker} here.")
+
+
 def test_fresh_thread_id_per_row(monkeypatch):
     # run_row must generate a NEW uuid4 thread_id per call (stale-answer bug
     # guard) — verify by capturing the config it passes to the graph.

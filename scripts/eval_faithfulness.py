@@ -100,7 +100,7 @@ def score_claims(claims, retrieval_keys, tool_events):
     """
     if not claims:
         return 0.0, 0.0, 0
-    from claim_ledger import validate_claims
+    from claim_ledger import evidence_status, validate_claims
     res = validate_claims(claims, retrieval_keys=retrieval_keys or set(),
                           tool_events=tool_events or [], strict=False)
     kept = res.claims
@@ -112,8 +112,16 @@ def score_claims(claims, retrieval_keys, tool_events):
         sc = c.get("status_counts", {})
         if not sc.get("verified") and not sc.get("external"):
             n_hall += 1
-    n_weak = sum(1 for c in kept if c.get("confidence") == "weak")
-    return n_hall / len(kept), n_weak / len(kept), len(kept)
+    # NOTE: build_claims_from_sources assigns EVERY claim confidence='weak'
+    # (citation-of-record lines carry no LLM-assessed confidence), so the
+    # confidence field is not a usable exposure signal. The meaningful measure
+    # is the share of claims whose evidence is entirely unresolved — claims
+    # the ledger itself cannot back.
+    n_weak = sum(
+        1 for c in kept
+        if c.get("evidence") and all(
+            evidence_status(e) == "unresolved" for e in c["evidence"]))
+    return n_hall / len(kept), (n_weak / len(kept) if kept else 0.0), len(kept)
 
 
 def score_citations(source_lines, expected_sources, refusal_expected):
