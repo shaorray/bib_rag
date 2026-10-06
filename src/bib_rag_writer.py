@@ -373,15 +373,12 @@ def build_scoped_query(topic: str, spec: Dict) -> str:
 
 
 def embed_query(text: str) -> List[float]:
-    resp = requests.post(
-        BIB_RAG_EMBED_URL,
-        headers={"Content-Type": "application/json"},
-        json={"input": text, "model": "bge-m3"},
-        timeout=30
-    )
-    emb = resp.json()["data"][0]["embedding"]
-    norm = sum(x * x for x in emb) ** 0.5
-    return [x / norm for x in emb] if norm > 0 else emb
+    """Embed query text via the shared toolkit embedder (src/embedding.py)."""
+    try:
+        from .embedding import embed_query as _shared
+    except ImportError:  # flat (loose-script mode)
+        from embedding import embed_query as _shared
+    return _shared(text)
 
 
 def read_long_document(query: str, source: str, top: int = 3) -> List[Dict]:

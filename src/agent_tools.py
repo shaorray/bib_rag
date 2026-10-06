@@ -642,7 +642,10 @@ class ToolFactory:
                 return (f"NO_MATCHES: no node in {source!r} matched. "
                         f"Try a different stem or build the doc's tree first.")
 
-            lines = [f"--- TREE RETRIEVAL: {source} (reasoning mode) ---"]
+            header = ("TREE RETRIEVAL: " + source + " (reasoning mode)")
+            if node_id:
+                header = ("TREE NODE READ: " + source + " (node " + str(node_id) + ")")
+            lines = ["--- " + header + " ---"]
             if res.get("reason"):
                 lines.append(f"reason: {res['reason']}")
             for h in hits:

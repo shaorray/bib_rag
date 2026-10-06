@@ -71,6 +71,17 @@ def _llm_settings() -> dict:
     return {"url": url, "model": model, "key": key}
 
 
+def llm_settings() -> dict:
+    """Public form of _llm_settings (kept as a public alias so cross-module
+    callers like tree_retrieve do not borrow the underscore-prefixed name)."""
+    return _llm_settings()
+
+
+def litellm_model_name(cfg: dict) -> str:
+    """Public form of _litellm_model_name (cross-module alias)."""
+    return _litellm_model_name(cfg)
+
+
 def _litellm_model_name(cfg: dict) -> str:
     """Translate a bib_rag LLM config to a litellm model string."""
     model = cfg["model"]

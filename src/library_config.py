@@ -52,19 +52,32 @@ def config_path(data_root: str) -> Path:
 
 
 def load_library_settings(data_root: str) -> dict:
-    """Read <library>/config.json settings block; {} if absent/invalid."""
-    p = config_path(data_root)
-    if not p.exists():
-        return {}
+    """Read <library>/config.json settings block; {} if absent/invalid.
+
+    Single source of truth: delegates to kb_config's reader so the two config
+    layers can never disagree on how config.json is parsed (the fragility
+    called out in review). kb_config is imported lazily to keep this module
+    standalone-importable.
+    """
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        s = data.get("settings", {})
-        return s if isinstance(s, dict) else {}
-    except Exception as e:
-        # a broken config must not brick the toolkit — warn and continue
-        import sys
-        print(f"[library_config] WARNING: could not parse {p}: {e}", file=sys.stderr)
-        return {}
+        try:
+            from .kb_config import read_settings_block
+        except ImportError:  # flat (loose-script mode)
+            from kb_config import read_settings_block
+        return read_settings_block(data_root)
+    except Exception:
+        # kb_config unavailable (standalone use) -> read it here, same shape.
+        p = config_path(data_root)
+        if not p.exists():
+            return {}
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            s = data.get("settings", {})
+            return s if isinstance(s, dict) else {}
+        except Exception as e:
+            import sys
+            print(f"[library_config] WARNING: could not parse {p}: {e}", file=sys.stderr)
+            return {}
 
 
 def get_setting(data_root: str, key: str, default=None):

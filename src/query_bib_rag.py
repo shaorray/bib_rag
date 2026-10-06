@@ -135,18 +135,12 @@ def _source_filename_stems(source: str):
 
 
 def embed_query(text: str) -> List[float]:
-    """Embed query text via llama-server bge-m3."""
-    resp = requests.post(
-        EMBED_URL,
-        headers={"Content-Type": "application/json"},
-        json={"input": text, "model": "bge-m3"},
-        timeout=30
-    )
-    resp.raise_for_status()
-    emb = resp.json()["data"][0]["embedding"]
-    # Normalize
-    norm = sum(x*x for x in emb) ** 0.5
-    return [x/norm for x in emb] if norm > 0 else emb
+    """Embed query text via the shared toolkit embedder (src/embedding.py)."""
+    try:
+        from .embedding import embed_query as _shared
+    except ImportError:  # flat (loose-script mode)
+        from embedding import embed_query as _shared
+    return _shared(text)
 
 
 def search(query: str, top_k: int = 5) -> List[Dict]:

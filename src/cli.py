@@ -52,10 +52,12 @@ if _USP.is_dir():
 def _code_root() -> Path:
     """Repo root (parent of src/) — for repo checkouts / editable installs.
 
+    Resolution precedence (same as kb_config):
+      BIB_RAG_CODE_ROOT env > derived parent with real layout >
+      <BIB_RAG_HOME>/bib_rag > repo-relative parent.
     For a pip-installed package the parent of the installed package dir is
-    site-packages (no repo there), so fall back to the canonical repo
-    location. Same resolution precedence as kb_config._resolve_rag_home:
-    BIB_RAG_CODE_ROOT env > derived parent with real layout > canonical.
+    site-packages (no repo there), so the BIB_RAG_HOME layout is tried first;
+    the final parent-of-file form is a last resort, never a hardcoded path.
     """
     env_root = os.environ.get("BIB_RAG_CODE_ROOT")
     if env_root:
@@ -63,7 +65,12 @@ def _code_root() -> Path:
     derived = Path(__file__).resolve().parent.parent
     if (derived / "src").is_dir() and (derived / "scripts").is_dir():
         return derived
-    return Path("/Disk_bot/RAG/bib_rag")
+    # Installed package: infer the toolkit checkout from the RAG home layout.
+    home = os.environ.get("BIB_RAG_HOME")
+    if home and (Path(home) / "bib_rag" / "src").is_dir():
+        return Path(home) / "bib_rag"
+    # Last resort: the file's own parent chain (portable, no machine path).
+    return derived
 
 
 # command → repo-relative script path

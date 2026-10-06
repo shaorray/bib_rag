@@ -41,16 +41,18 @@ if _argv:
 _CFG = get_config()
 
 try:  # bib_rag-package-try
-    from .tree_index import load_index, list_indexes, _llm_settings, _litellm_model_name
+    from .tree_index import (load_index, list_indexes,
+                             llm_settings, litellm_model_name)
 except ImportError:
-    from tree_index import load_index, list_indexes, _llm_settings, _litellm_model_name
+    from tree_index import (load_index, list_indexes,
+                            llm_settings, litellm_model_name)
 
 
 # ─── LLM call (OpenAI-compatible, same endpoint as the rest of bib_rag) ─────
 def _llm_json(system: str, user: str, max_tokens: int = 2000) -> dict:
     import requests
 
-    cfg = _llm_settings()
+    cfg = llm_settings()
     url = cfg["url"].rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if cfg.get("key") and cfg["key"] != "not-required":

@@ -69,6 +69,20 @@ def get_code_root() -> str:
     return _CODE_ROOT
 
 
+def read_settings_block(root: str) -> dict:
+    """Read <root>/config.json 'settings' block; {} if absent/invalid.
+
+    The single reader for the per-library config.json, shared with
+    library_config so the two config layers can never disagree on parsing.
+    """
+    try:
+        data = json.loads(Path(root, "config.json").read_text(encoding="utf-8"))
+        s = data.get("settings", {})
+        return s if isinstance(s, dict) else {}
+    except Exception:
+        return {}
+
+
 def _read_collection_from_library_config(root: str) -> str:
     """collection from <root>/config.json settings block; '' if absent."""
     try:
