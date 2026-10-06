@@ -74,7 +74,16 @@ DEFAULT_WEAK_MIN = 0.55
 DEFAULT_AMBIG_GAP = 0.10     # runner-up within this of best → ambiguous
 DEFAULT_YEAR_TOL = 1
 
-DEFAULT_DATA_ROOT = "/Disk_bot/RAG/eph_rag"
+# Resolved lazily from kb_config at runtime (see _default_data_root) — a
+# hardcoded root here silently resolved against the wrong library when the
+# toolkit ran via a wrapper (BIB_RAG_KB_NAME) with no BIB_RAG_ROOT set.
+def _default_data_root() -> str:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+        from kb_config import get_config
+        return get_config()["data_root"]
+    except Exception:
+        return os.environ.get("BIB_RAG_ROOT") or os.getcwd()
 DEFAULT_SEED = 20260831
 
 _YEAR_RE = re.compile(r"((?:19|20)\d{2})")
@@ -469,7 +478,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Resolve raw reference-graph edges to corpus papers "
                     "(local surname+year matching, no network).")
-    ap.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
+    ap.add_argument("--data-root", default=_default_data_root())
     ap.add_argument("--out", default=None,
                     help="default <data-root>/data/reference_graph_matched.json")
     ap.add_argument("--year-tol", type=int, default=DEFAULT_YEAR_TOL)

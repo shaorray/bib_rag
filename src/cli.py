@@ -19,6 +19,8 @@ Commands:
     remove [args]                 → scripts/remove_paper.py
     classify [args]               → scripts/classify_papers.py
     graph [args]                  → src/reference_graph.py
+    tree-index <doc> [args]       → src/tree_index.py (build vectorless tree index)
+    tree-query <text> [args]      → src/tree_retrieve.py (reasoning tree retrieval)
     bib export [args]             → scripts/bibtex_export... (auto-discovered)
     config                        → print active library config
     run <path> [args]             → run ANY script in the toolkit by
@@ -84,6 +86,8 @@ COMMANDS = {
     "grill": "src/bib_rag_writer.py",       # legacy alias → merged writer
     "writer": "src/bib_rag_writer.py",
     "claims": "src/claim_ledger.py",        # VB-style claim-evidence ledger
+    "tree-index": "src/tree_index.py",      # PageIndex-style tree index (vectorless)
+    "tree-query": "src/tree_retrieve.py",   # reasoning-based tree retrieval
 }
 
 

@@ -574,6 +574,89 @@ class ToolFactory:
         except Exception as e:
             return f"COVERAGE_ERROR: {str(e)}"
 
+    def search_tree(self, query: str, source: str = "", top: int = 3,
+                    node_id: str = "", part: int = 1) -> str:
+        """Reasoning-based retrieval over a document's tree index (PageIndex mode).
+
+        Vectorless: an LLM reasons down a hierarchical outline instead of
+        doing embedding similarity. Best for long single documents where
+        relevance != similarity (reviews, contracts, manuals, reports).
+
+        Args:
+            query: the question to answer from the document.
+            source: tree stem from tree_index.py (e.g. 'Brennan_2010_update_blood_vessel_migraine').
+            top: max nodes to return.
+            node_id: when set, skip reasoning and read THAT node directly (its own pages).
+            part: outline page to browse when no query is given (1-based).
+        """
+        try:
+            try:
+                from .tree_retrieve import retrieve, retrieve_by_node, paginate_outline, CITATION_PROTOCOL
+                from .tree_index import list_indexes, load_index, quality_report
+            except ImportError:  # flat (loose-script mode)
+                from tree_retrieve import retrieve, retrieve_by_node, paginate_outline, CITATION_PROTOCOL
+                from tree_index import list_indexes, load_index, quality_report
+            if not source:
+                rows = list_indexes()
+                if not rows:
+                    return ("NO_TREE_INDEX: no tree indexes built yet. Build one with "
+                            "'bibrag tree-index <pdf>' (or run src/tree_index.py).")
+                avail = ", ".join(r["stem"] for r in rows[:12])
+                return (f"NEED_SOURCE: search_tree requires --source. "
+                        f"Available tree indexes: {avail}")
+
+            manifest = load_index(source)
+            if manifest is None:
+                return (f"NO_TREE_INDEX: no tree index for {source!r}; build one with "
+                        f"'bibrag tree-index <pdf>'.")
+
+            # Branch 1: direct node read -> skip reasoning, return that node's pages.
+            # Checked before the no-query browse, so node_id alone reads a section.
+            if node_id:
+                res = retrieve_by_node(node_id, source)
+                hits = res.get("hits") or []
+                if not hits:
+                    return f"NO_NODE: node {node_id!r} not found in {source!r}."
+
+            # Branch 2: no query and no node -> browse the outline, paginated
+            # (every node stays reachable; a long tree is never silently truncated).
+            elif not query:
+                page = paginate_outline(manifest["tree"], part=part)
+                qc = manifest.get("qc") or quality_report(
+                    manifest["tree"], manifest.get("page_count"))
+                head = [f"--- TREE OUTLINE: {source} (part {page['part']}/{page['total_parts']}) ---"]
+                if not qc.get("ok"):
+                    head.append(f"⚠ QC: {len(qc['issues'])} structural issue(s)")
+                head.append(page["text"])
+                if page["has_more"]:
+                    head.append(f"(has_more: request part={page['part'] + 1})")
+                head.append("Pass a `query` to reason over these nodes, or a "
+                            "`node_id` to read one directly.")
+                return "\n".join(head)
+
+            # Branch 3: reason over the tree with the query.
+            else:
+                res = retrieve(query, source, top=top)
+                hits = res.get("hits") or []
+            if not hits:
+                return (f"NO_MATCHES: no node in {source!r} matched. "
+                        f"Try a different stem or build the doc's tree first.")
+
+            lines = [f"--- TREE RETRIEVAL: {source} (reasoning mode) ---"]
+            if res.get("reason"):
+                lines.append(f"reason: {res['reason']}")
+            for h in hits:
+                lines.append(
+                    f"[{h['node_id']}] {h['title']} (p{h['start_index']}-{h['end_index']})\n"
+                    f"{(h.get('text') or h.get('summary') or '')[:1500]}")
+            lines.append("")
+            lines.append(CITATION_PROTOCOL)
+            return "\n".join(lines)
+        except FileNotFoundError as e:
+            return f"NO_TREE_INDEX: {e}"
+        except Exception as e:
+            return f"TREE_ERROR: {str(e)}"
+
 
 from langchain_core.tools import tool
 
@@ -619,9 +702,16 @@ def create_tools(collection=None):
         """Check whether the retrieved evidence spans multiple citation-graph communities (research schools / subfields). Pass the list of source filenames from your search results. Returns the community distribution and flags >70% concentration in a single community (possible one-school bias). Reports NO_LABELS gracefully when the library lacks community metadata."""
         return factory.check_evidence_coverage(sources)
 
+    @tool
+    def search_tree(query: str = "", source: str = "", top: int = 3,
+                    node_id: str = "", part: int = 1) -> str:
+        """Reasoning-based (vectorless) tree retrieval over ONE long document. Unlike search_child_chunks (semantic similarity across the whole library), this reasons down a hierarchical outline of a single document — use it for long PDFs/reviews/reports where relevance requires context, not similarity. Requires the doc's tree index (build with 'bibrag tree-index <pdf>'). Modes: (a) pass `query` to reason over the tree and return matching nodes+text; (b) pass `node_id` to read that node's pages directly; (c) pass neither to browse the outline (`part` to page through a long outline). Omit `source` to list available stems. Answers built from tree hits must follow the grounding/citation contract appended to the output."""
+        return factory.search_tree(query, source=source, top=top,
+                                   node_id=node_id, part=part)
+
     return [search_child_chunks, retrieve_parent_chunks, retrieve_many_parents,
             find_papers_citing, get_paper_references, find_related_papers,
-            check_evidence_coverage]
+            check_evidence_coverage, search_tree]
 
 
 if __name__ == "__main__":

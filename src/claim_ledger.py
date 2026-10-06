@@ -328,7 +328,18 @@ def validate_claims(claims: Any, retrieval_keys: Optional[Set[str]] = None,
 # ════════════════════════════════════════════════════════════════════════
 
 def default_ledger_path() -> str:
-    root = os.environ.get("BIB_RAG_ROOT", "/Disk_bot/RAG/bib_rag")
+    """Ledger path for the ACTIVE library, via kb_config (never a hardcoded
+    root). Falls back to the data root the rest of the toolkit resolves, so a
+    wrapper-driven run (BIB_RAG_KB_NAME) writes to the right library."""
+    try:
+        try:
+            from .kb_config import get_config
+        except ImportError:  # flat (loose-script mode)
+            from kb_config import get_config
+        root = get_config()["data_root"]
+    except Exception:
+        # Last-resort only: an explicit root if the caller set one, else CWD.
+        root = os.environ.get("BIB_RAG_ROOT") or os.getcwd()
     return str(Path(root) / "claim_ledger.jsonl")
 
 

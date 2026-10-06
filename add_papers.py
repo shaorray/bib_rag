@@ -26,6 +26,9 @@ Options:
   --dry-run         Show what would be done without executing
   --no-enrich       Skip metadata enrichment (Crossref/PubMed backfill)
   --enrich-offline  Enrichment regex-scan only, no network calls
+  --tree            Also build a PageIndex-style tree index per PDF (vectorless
+                    long-doc retrieval; see src/tree_index.py)
+  --tree-mode       flash (default) | standard — tree build mode
 """
 
 import os
@@ -55,6 +58,10 @@ QUERY_SCRIPT = CODE_ROOT / "src" / "query_bib_rag.py"
 # port 8081, bypassing the broken SentenceTransformers import). build_hierarchical.py
 # is retired — it depended on SentenceTransformer which no longer imports.
 from index_single_paper import index_paper
+
+# Tree indexing (PageIndex-style, vectorless) — imported lazily in tree_step()
+# so runs without --tree pay no import cost.
+TREE_INDEX_SCRIPT = CODE_ROOT / "src" / "tree_index.py"
 
 # Metadata enrichment (Crossref/PubMed backfill of doi/pmid/title/journal/authors)
 # at add-time. Imported lazily in enrich_step() so --no-enrich runs never pay
@@ -231,6 +238,37 @@ def run_build(md_files: list, batch_size: int, meta_map: dict = None) -> bool:
 
 # ---- Verification ----
 
+def tree_step(pdfs: list[Path], mode: str = "flash") -> dict:
+    """Build PageIndex-style tree indexes for the given PDFs (vectorless).
+
+    Runs src/tree_index.py as a subprocess so tree indexing failures never
+    abort the main add pipeline. Indexes land in
+    <library>/parent_store/trees/, side-by-side with parent_store/.
+    """
+    results = {"ok": [], "failed": []}
+    for pdf in pdfs:
+        cmd = [sys.executable, "-B", str(TREE_INDEX_SCRIPT), str(pdf),
+               "--mode", mode]
+        env = dict(os.environ)
+        env.setdefault("PYTHONPATH", str(Path.home() / ".local/lib/python3.10/site-packages"))
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
+            if r.returncode == 0:
+                print(f"  🌳 {pdf.stem}")
+                results["ok"].append(pdf.stem)
+            else:
+                print(f"  ⚠️  tree failed: {pdf.name} — {(r.stderr or '').strip()[:200]}")
+                results["failed"].append(pdf.stem)
+        except Exception as e:
+            print(f"  ⚠️  tree error: {pdf.name} — {e}")
+            results["failed"].append(pdf.stem)
+    print(f"  → {len(results['ok'])} tree index(es) built, "
+          f"{len(results['failed'])} failed")
+    if results["ok"]:
+        print(f"  trees dir: {KB_ROOT / 'parent_store' / 'trees'}")
+    return results
+
+
 def verify_query(query: str) -> bool:
     """Run a test query to verify new papers are searchable."""
     print(f"\n🔍 Verification query: \"{query}\"")
@@ -272,6 +310,11 @@ def main():
                         help="Skip Crossref/PubMed metadata enrichment")
     parser.add_argument("--enrich-offline", action="store_true",
                         help="Enrichment regex-scan only (no network); implies enrichment on")
+    parser.add_argument("--tree", action="store_true",
+                        help="Also build a PageIndex-style tree index per PDF "
+                             "(vectorless long-doc retrieval; see src/tree_index.py)")
+    parser.add_argument("--tree-mode", choices=["flash", "standard"], default="flash",
+                        help="Tree build mode (default: flash)")
     args = parser.parse_args()
 
     global ENRICH_ONLINE, ENRICH_NETWORK
@@ -359,6 +402,13 @@ def main():
     if not success:
         print("\n⚠️  Indexing had issues. Papers may not be fully indexed.")
         sys.exit(1)
+
+    # ---- Step 2b: Tree index (optional, vectorless long-doc retrieval) ----
+    if args.tree:
+        print(f"\n{'─'*70}")
+        print("Step 2b: Building tree indexes (PageIndex mode)")
+        print(f"{'─'*70}")
+        tree_step(pdfs, mode=args.tree_mode)
 
     # ---- Step 4: Verify ----
     if args.verify:

@@ -384,6 +384,102 @@ def embed_query(text: str) -> List[float]:
     return [x / norm for x in emb] if norm > 0 else emb
 
 
+def read_long_document(query: str, source: str, top: int = 3) -> List[Dict]:
+    """Read ONE long document via its tree index (PageIndex reasoning mode).
+
+    Returns passage dicts in the same shape search_bib_rag yields, so the
+    synthesis backends treat tree hits and vector hits identically:
+        {text, title, authors, year, doi, section, similarity,
+         source="tree", node_id}
+
+    Falls back to an empty list when the stem has no tree index (the caller
+    then proceeds with the ordinary vector search).
+    """
+    try:
+        try:
+            from .tree_retrieve import retrieve
+            from .tree_index import load_index
+        except ImportError:  # flat (loose-script mode)
+            from tree_retrieve import retrieve
+            from tree_index import load_index
+    except Exception:
+        return []
+
+    manifest = load_index(source)
+    if manifest is None:
+        print(f"  ⚠️  no tree index for {source!r}; skipping tree read "
+              f"(build with 'bibrag tree-index <pdf>')")
+        return []
+
+    res = retrieve(query, source, top=top)
+    hits = res.get("hits") or []
+    meta = _resolve_tree_meta(manifest)
+    out = []
+    for h in hits:
+        out.append({
+            "text": h.get("text") or h.get("summary") or "",
+            # node title is the section header — a truer "section" than the
+            # doc-level metadata the vector path carries
+            "title": h.get("title") or manifest.get("stem", source),
+            "authors": meta.get("authors", ""),
+            "year": meta.get("year", ""),
+            "doi": meta.get("doi", ""),
+            "section": f"node {h.get('node_id')} (p{h.get('start_index')}-{h.get('end_index')})",
+            "similarity": 1.0,  # tree hits are reasoned, not scored
+            "source": "tree",
+            "node_id": h.get("node_id"),
+            "doc_stem": source,
+        })
+    if out:
+        print(f"  🌳 tree read: {len(out)} node(s) from {source} "
+              f"[{res.get('reason', '')[:80]}]")
+    return out
+
+
+def _resolve_tree_meta(manifest: Dict) -> Dict:
+    """Resolve author/year/doi for a tree document.
+
+    The tree manifest carries whatever metadata was available at build time
+    under 'meta'. When that is absent (older indexes), fall back to the
+    library's chroma metadata keyed by the document stem, so a tree hit's
+    citations carry the same author/year the vector path reports.
+    """
+    meta = manifest.get("meta") or {}
+    if meta.get("authors") or meta.get("year") or meta.get("doi"):
+        return meta
+    stem = manifest.get("stem") or ""
+    try:
+        from langchain_community.vectorstores import Chroma
+
+        class _Precomputed:
+            def __init__(self):
+                self.emb = embed_query("metadata lookup")
+
+            def embed_documents(self, texts):
+                return [self.emb] * len(texts)
+
+            def embed_query(self, text):
+                return self.emb
+
+        db = Chroma(persist_directory=CHROMA_PATH,
+                    collection_name=_CFG["collection_name"],
+                    embedding_function=_Precomputed())
+        # chroma keys `source` on the markdown filename (<stem>.md), so try
+        # both the bare stem and the .md form before giving up.
+        for key in (f"{stem}.md", stem):
+            got = db._collection.get(where={"source": key}, limit=1,
+                                     include=["metadatas"])
+            metas = (got or {}).get("metadatas") or []
+            if metas:
+                m = metas[0] or {}
+                return {"authors": m.get("authors", ""),
+                        "year": m.get("year", ""),
+                        "doi": m.get("doi", "")}
+    except Exception:
+        pass
+    return {}
+
+
 def search_bib_rag(query: str, top_k: int = 5) -> List[Dict]:
     emb = embed_query(query)
     from langchain_community.vectorstores import Chroma
@@ -480,6 +576,10 @@ def main():
     parser.add_argument("--top", type=int, default=5, help="Number of passages to retrieve")
     parser.add_argument("--output", help="Output file path (default: <library>/outputs/writer_<ts>.md)")
     parser.add_argument("--save-spec", help="Save the spec to this path (default: /tmp/bib_rag_grill_specs/<ts>.json)")
+    parser.add_argument("--tree-source", metavar="STEM", default=None,
+                        help="Also read ONE long document by its tree index (PageIndex "
+                             "reasoning mode) — pass the tree stem from 'bibrag tree-index'. "
+                             "Tree passages are prepended to the vector hits before synthesis.")
     args = parser.parse_args()
 
     if not args.topic and not args.spec:
@@ -517,13 +617,24 @@ def main():
     print(f"   '{scoped_query}'")
 
     passages = search_bib_rag(scoped_query, top_k=args.top)
+
+    # Optional: prepend a reasoned read of one long document from its tree index.
+    # This is the "long-doc精读" path — vector similarity misses what is relevant
+    # but not lexically similar; tree reasoning recovers it.
+    if args.tree_source:
+        print(f"\n🌳 PHASE B2: tree read (reasoning mode) — {args.tree_source}")
+        tree_hits = read_long_document(scoped_query, args.tree_source, top=3)
+        if tree_hits:
+            passages = tree_hits + passages
+
     if not passages:
         print("❌ No passages found.")
         sys.exit(1)
     print(f"✅ Found {len(passages)} passages\n")
 
     for i, p in enumerate(passages, 1):
-        print(f"  [{i}] {p['title'][:60]} (sim={p['similarity']:.3f})")
+        tag = "🌳" if p.get("source") == "tree" else "  "
+        print(f" {tag}[{i}] {p['title'][:60]} (sim={p['similarity']:.3f})")
 
     # Synthesis backend dispatch: --no-llm | --debate | default (spec-aware LLM)
     if args.no_llm:
