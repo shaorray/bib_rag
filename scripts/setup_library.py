@@ -189,7 +189,7 @@ def main():
         except Exception:
             _data = {}
         _data.setdefault("settings", {})["collection"] = collection
-        cfg_path.write_text(_json.dumps(_data, indent=2, ensure_ascii=False) + "\n",
+        cfg_path.write_text(json.dumps(_data, indent=2, ensure_ascii=False) + "\n",
                             encoding="utf-8")
         print(f"  [ok] collection '{collection}' written to {cfg_path}")
     else:
