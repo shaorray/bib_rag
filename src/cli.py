@@ -95,6 +95,7 @@ COMMANDS = {
     "claims": "src/claim_ledger.py",        # VB-style claim-evidence ledger
     "tree-index": "src/tree_index.py",      # PageIndex-style tree index (vectorless)
     "tree-query": "src/tree_retrieve.py",   # reasoning-based tree retrieval
+    "autoresearch": "src/autoresearch.py",  # autonomous 'dreaming' research loop
 }
 
 
