@@ -143,7 +143,8 @@ def embed_query(text: str) -> List[float]:
     return _shared(text)
 
 
-def search(query: str, top_k: int = 5) -> List[Dict]:
+def search(query: str, top_k: int = 5, expand: bool = True,
+           distill: bool = True) -> List[Dict]:
     """Semantic search in ChromaDB.
 
     Results go through the shared v3 post-fusion pipeline
@@ -151,13 +152,41 @@ def search(query: str, top_k: int = 5) -> List[Dict]:
     boost → per-source diversity cap) — the SAME pipeline as the agentic
     path, so both entry points serve identical quality. Pipeline stages
     fail soft; on any failure the raw similarity order ships.
+
+    Sub-query expansion (Khoj extract_questions mechanism, src/subquery.py):
+    when enabled, ONE local-LLM call decomposes `query` into ≤N one-concept
+    retrieval queries; each is retrieved independently and the candidate
+    pools are merged before the shared post-fusion pipeline ranks them. This
+    is the dependency-light seam for the plain CLI (the agentic graph already
+    rewrites its own queries). Env kill-switch: SUBQUERY_EXPAND=0.
     """
+    # Query variants: original first, then LLM-decomposed sub-queries.
+    # expand_query never raises and always returns the original on failure.
+    queries = [query]
+    if expand:
+        try:
+            try:
+                from .subquery import expand_query
+            except ImportError:
+                from subquery import expand_query
+            queries = expand_query(query) or [query]
+        except Exception:
+            queries = [query]
+
     emb = embed_query(query)
     # Adapt CLI result shape → pipeline entry shape (needs text + source;
     # cap stage does the final cut, so over-fetch for the pipeline to
     # rerank a wider pool than the final top_k).
     pool_size = max(top_k * 3, 12)
     results = native_chroma_search(query, emb, pool_size)
+
+    # Multi-query merge: retrieve each sub-query and union by chunk id,
+    # keeping the best distance seen per chunk so RRF/rerank see a fair pool.
+    # The original query's results are already in hand (native path above)
+    # and keep their fresh parent_store meta overlay.
+    if len(queries) > 1:
+        results = _merge_query_results(query, queries, results, pool_size)
+
     entries = []
     for r in results:
         meta = r.get("metadata") or {}
@@ -183,9 +212,67 @@ def search(query: str, top_k: int = 5) -> List[Dict]:
                 r = dict(r)
                 r["rerank_score"] = e["rerank_score"]
             out.append(r)
-        return out
     except Exception:
-        return results[:top_k]
+        out = results[:top_k]
+
+    # Analyst distillation (Khoj extract_relevant_info mechanism, src/distill.py):
+    # attach a verbatim extract per hit so callers can show ONLY the
+    # answer-relevant, quotable span. Fails soft — hits without an extract
+    # keep their raw text. Env kill-switch: DISTILL=0.
+    if distill:
+        try:
+            try:
+                from .distill import distill_hits
+            except ImportError:
+                from distill import distill_hits
+            _entries = [{"text": r["text"],
+                         "similarity": (1.0 / (1.0 + r["distance"])
+                                        if r.get("distance") is not None else None),
+                         "_ref": r} for r in out]
+            distill_hits(query, _entries)
+            for e in _entries:
+                if e.get("distilled"):
+                    e["_ref"]["distilled"] = e["distilled"]
+        except Exception:
+            pass
+    return out
+
+
+def _merge_query_results(orig_query: str, queries: List[str],
+                         base_results: List[Dict], pool_size: int) -> List[Dict]:
+    """Union the original query's hits with each sub-query's hits.
+
+    Dedup by chunk id, keeping the smallest distance (best hit) per id.
+    The original query's dicts are reused verbatim (they carry the fresh
+    parent_store meta overlay from native_chroma_search); sub-query hits get
+    the same overlay applied. Any sub-query failure is skipped silently —
+    expansion must never make retrieval worse than the single-query path.
+    """
+    merged: Dict[str, Dict] = {}
+    for r in base_results:
+        merged[r["id"]] = r
+    for q in queries:
+        if q == orig_query:
+            continue
+        try:
+            emb = embed_query(q)
+            if not emb:
+                continue
+            hits = native_chroma_search(q, emb, pool_size)
+        except Exception:
+            continue
+        for r in hits:
+            rid = r["id"]
+            prev = merged.get(rid)
+            if prev is None or (r.get("distance") is not None
+                                and (prev.get("distance") is None
+                                     or r["distance"] < prev["distance"])):
+                merged[rid] = r
+    # Re-sort by distance so downstream fusion starts from a distance-ordered
+    # pool (missing distances sink to the end).
+    return sorted(merged.values(),
+                  key=lambda r: r.get("distance") if r.get("distance") is not None
+                  else float("inf"))
 
 
 def native_chroma_search(query: str, embedding: List[float], top_k: int = 5):
@@ -260,22 +347,25 @@ def format_results(results: List[Dict], query: str):
         if note:
             print(f"    ⚠️  {note}")
         
-        # Show excerpt (first 300 chars)
-        text = r["text"][:300].replace("\n", " ")
-        print(f"    💬 {text}...")
+        # Show excerpt (first 300 chars); prefer the analyst's verbatim
+        # extract when distillation produced one.
+        text = (r.get("distilled") or r["text"])[:300].replace("\n", " ")
+        tag = "📑 extract" if r.get("distilled") else "💬"
+        print(f"    {tag} {text}...")
         print()
     
     print(f"{'='*70}")
     print(f"Found {len(results)} relevant passages\n")
 
 
-def cite_mode(claim: str, top_k: int = 5):
+def cite_mode(claim: str, top_k: int = 5, expand: bool = True,
+              distill: bool = True):
     """Find supporting evidence for a claim."""
     print(f"\n{'='*70}")
     print(f"📚 Citation Search: \"{claim[:80]}...\"")
     print(f"{'='*70}\n")
     
-    results = search(claim, top_k=top_k)
+    results = search(claim, top_k=top_k, expand=expand, distill=distill)
     
     for i, r in enumerate(results, 1):
         meta = r["metadata"]
@@ -340,11 +430,14 @@ Usage:
   python3 query_bib_rag.py --kb geo_rag "subduction zone"
   python3 query_bib_rag.py "axon guidance" --export-bib refs.bib
   python3 query_bib_rag.py --cite "claim" --export-bib refs.bib --offline-bib
+  python3 query_bib_rag.py "axon guidance" --no-expand
 
 Options:
   --cite          Find supporting citations for a claim
   --top N         Return top N results (default: 5)
   --kb NAME       Switch knowledge base (bib_rag, geo_rag)
+  --no-expand     Disable LLM sub-query expansion (single-query retrieval)
+  --no-distill    Disable per-hit verbatim analyst extraction
   --export-bib P  Also write a BibTeX References file for the results
   --offline-bib   Synthesize entries from parent_store meta only (no network)
 
@@ -358,12 +451,20 @@ Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
     top_k = 5
     export_bib_path = ""
     offline_bib = False
+    expand = True
+    distill = True
     query_parts = []
     
     i = 0
     while i < len(args):
         if args[i] == "--cite":
             cite_mode_flag = True
+            i += 1
+        elif args[i] == "--no-expand":
+            expand = False
+            i += 1
+        elif args[i] == "--no-distill":
+            distill = False
             i += 1
         elif args[i] == "--top" and i + 1 < len(args):
             top_k = int(args[i + 1])
@@ -381,9 +482,9 @@ Active KB: {_CFG['kb_name']} at {_CFG['kb_root']}
     query = " ".join(query_parts)
     
     if cite_mode_flag:
-        results = cite_mode(query, top_k)
+        results = cite_mode(query, top_k, expand=expand, distill=distill)
     else:
-        results = search(query, top_k)
+        results = search(query, top_k, expand=expand, distill=distill)
         format_results(results, query)
     if export_bib_path:
         export_bib(results, export_bib_path, offline=offline_bib)

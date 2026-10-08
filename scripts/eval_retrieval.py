@@ -17,8 +17,15 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(0, '/Disk_bot/RAG/bib_rag/src')
+
+# agent_tools imports agent_nodes which uses relative imports, so it only
+# loads in PACKAGE mode (src.agent_tools). Put the repo root on the path too
+# and import the package form (same as agentic_query.py).
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, _REPO_ROOT)
 
 from kb_config import get_config, parse_kb_arg
 
@@ -57,7 +64,8 @@ def main():
     print(f'library : {cfg["kb_name"]}   gold: {len(rows)} queries   k={args.k}')
 
     # late imports so env vars set above are respected
-    from agent_tools import ToolFactory
+    import src.agent_tools as _at
+    ToolFactory = _at.ToolFactory
     from hybrid_search import HybridIndex
 
     tf = ToolFactory()
@@ -65,18 +73,47 @@ def main():
 
     def retrieve(query, limit):
         """Exact production path (no broaden, no formatting): dense limit
-        candidates → RRF with bm25 limit*3 pool → top_k."""
-        res = tf._vector_search(query, limit, None)
-        if res is None:
-            return []
-        entries = tf._vector_entries(res)
-        if os.environ.get('HYBRID_SEARCH', '1') != '0':
+        candidates → RRF with bm25 limit*3 pool → post-fusion.
+
+        P0 sub-query expansion (env SUBQUERY_EXPAND, default OFF here so the
+        baseline is byte-identical to before): when on, each LLM sub-query is
+        retrieved and the pools are unioned by chunk identity — the same
+        merge contract as query_bib_rag._merge_query_results."""
+        def _one(q):
+            res = tf._vector_search(q, limit, None)
+            if res is None:
+                return []
+            entries = tf._vector_entries(res)
+            if os.environ.get('HYBRID_SEARCH', '1') != '0':
+                try:
+                    return idx.search(q, entries, top_k=limit * 3)
+                except Exception:
+                    return entries[:limit * 3]
+            return entries[:limit * 3]
+
+        if os.environ.get('SUBQUERY_EXPAND', '0') == '1':
             try:
-                out = idx.search(query, entries, top_k=limit * 3)
+                from subquery import expand_query
+                queries = expand_query(query) or [query]
             except Exception:
-                out = entries[:limit * 3]
+                queries = [query]
         else:
-            out = entries[:limit * 3]
+            queries = [query]
+
+        out = _one(query)
+        if len(queries) > 1:
+            merged = {}
+            for e in out:
+                merged[(e.get('source'), e.get('section'),
+                        (e.get('text') or '')[:80])] = e
+            for q in queries[1:]:
+                for e in _one(q):
+                    k = (e.get('source'), e.get('section'),
+                         (e.get('text') or '')[:80])
+                    prev = merged.get(k)
+                    if prev is None or (e.get('rrf') or 0) > (prev.get('rrf') or 0):
+                        merged[k] = e
+            out = sorted(merged.values(), key=lambda e: -(e.get('rrf') or 0))
         # rerank REORDERS the full fused pool (no cut — the cap below does
         # the final cut); mirrors search_child_chunks
         if os.environ.get('RERANK', '1') != '0':
