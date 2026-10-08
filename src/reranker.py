@@ -38,6 +38,13 @@ RERANK_URL = os.environ.get(
 RERANK_MODEL = os.environ.get('RERANK_MODEL', 'bge-reranker-v2-m3')
 RERANK_MAX_CHARS = int(os.environ.get('RERANK_MAX_CHARS', '1000'))
 RERANK_TIMEOUT = int(os.environ.get('RERANK_TIMEOUT', '30'))
+# Max pairs per submitted batch. The server packs several (query,doc) pairs
+# into one physical batch; a big pool sent in one call can exceed the server's
+# ubatch even when each individual pair fits. Splitting keeps each request
+# small and independent (observed 2026-10-08: a 64-pair expanded pool tripped
+# the server's 512-token ubatch; the server default is now 2048 but the client
+# must not depend on a specific server config).
+RERANK_BATCH = int(os.environ.get('RERANK_BATCH', '16'))
 
 _WARNED = {"n": 0}
 
@@ -68,6 +75,44 @@ def rerank_available() -> bool:
         return False
 
 
+def _rerank_batch(query: str, batch: List[dict]) -> Optional[List[float]]:
+    """Score one batch of docs. Returns a list of relevance scores aligned
+    to `batch`, or None on failure (caller degrades)."""
+    docs = [(r.get('text') or '')[:RERANK_MAX_CHARS] for r in batch]
+    body = json.dumps({
+        'model': RERANK_MODEL, 'query': query, 'documents': docs,
+        'top_n': len(docs),
+    }).encode()
+    last_err: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(
+                RERANK_URL, data=body,
+                headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=RERANK_TIMEOUT) as r:
+                out = json.loads(r.read())
+            scores = [None] * len(batch)
+            for hit in out['results']:
+                scores[hit['index']] = hit['relevance_score']
+            return scores
+        except urllib.error.HTTPError as e:
+            last_err = e
+            # Transient 5xx (e.g. ubatch overflow, momentary overload):
+            # back off briefly and retry once before degrading.
+            if attempt == 0 and 500 <= getattr(e, 'code', 0) < 600:
+                import time as _t
+                _t.sleep(1.0)
+                continue
+        except (urllib.error.URLError, KeyError, IndexError, ValueError,
+                TimeoutError, json.JSONDecodeError) as e:
+            last_err = e
+        except Exception as e:
+            last_err = e
+        break
+    _warn_unavailable(f"{type(last_err).__name__}: {last_err}")
+    return None
+
+
 def rerank_results(query: str, results: List[dict],
                    top_k: Optional[int] = None) -> List[dict]:
     """Reorder `results` (list of retrieval dicts with 'text') by
@@ -76,33 +121,30 @@ def rerank_results(query: str, results: List[dict],
     Never raises: any failure returns `results` unchanged. A 2-result
     list isn't worth a network round-trip — passthrough. Short lists keep
     their fusion order (RRF already did the work).
+
+    The pool is submitted in batches of RERANK_BATCH pairs so a large pool
+    cannot overflow the server's physical batch; if ANY batch fails, the
+    whole call degrades to fusion order (a partially-reranked pool is worse
+    than a consistently-ordered one).
     """
     if not results or len(results) < 3:
         return results[:top_k] if top_k else results
-    docs = [(r.get('text') or '')[:RERANK_MAX_CHARS] for r in results]
-    try:
-        body = json.dumps({
-            'model': RERANK_MODEL, 'query': query, 'documents': docs,
-            'top_n': len(docs),
-        }).encode()
-        req = urllib.request.Request(
-            RERANK_URL, data=body,
-            headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=RERANK_TIMEOUT) as r:
-            out = json.loads(r.read())
-        ranked = sorted(out['results'], key=lambda x: -x['relevance_score'])
-        reordered = []
-        for hit in ranked:
-            e = dict(results[hit['index']])
-            e['rerank_score'] = round(hit['relevance_score'], 4)
-            e['rrf'] = results[hit['index']].get('rrf')   # keep RRF for debug
-            reordered.append(e)
-        return reordered[:top_k] if top_k else reordered
-    except (urllib.error.URLError, KeyError, IndexError, ValueError,
-            TimeoutError, json.JSONDecodeError) as e:
-        _warn_unavailable(f"{type(e).__name__}: {e}")
-        return results[:top_k] if top_k else results
-    except Exception as e:
-        # reranking is an enhancement, never a dependency
-        _warn_unavailable(f"{type(e).__name__}: {e}")
-        return results[:top_k] if top_k else results
+
+    scores: List[Optional[float]] = []
+    step = max(1, RERANK_BATCH)
+    for i in range(0, len(results), step):
+        part = _rerank_batch(query, results[i:i + step])
+        if part is None:
+            # One failing batch → degrade the whole call (consistent order).
+            return results[:top_k] if top_k else results
+        scores.extend(part)
+
+    order = sorted(range(len(results)), key=lambda i: -(scores[i] or -1e9))
+    reordered = []
+    for i in order:
+        e = dict(results[i])
+        if scores[i] is not None:
+            e['rerank_score'] = round(scores[i], 4)
+        e['rrf'] = results[i].get('rrf')   # keep RRF for debug
+        reordered.append(e)
+    return reordered[:top_k] if top_k else reordered
