@@ -1,4 +1,4 @@
-# bib_rag — Stop AI from inventing your citations
+# bib_rag 
 
 **An evidence-gated RAG toolkit for academic writing.** Every sentence your AI
 drafts must trace back to a paper that is actually *in your library* —
