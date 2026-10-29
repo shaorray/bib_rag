@@ -115,8 +115,7 @@ the same markdown restores it cleanly.
 
 Python ≥ 3.10 · ChromaDB 1.4.1 · LangGraph/LangChain ≥ 0.3 · pymupdf4llm
 (embedding service ≥ 8081; LLM endpoint for agentic/writer paths). Full list:
-`requirements.txt`. GPU recommended for bulk indexing (~1–2s/paper on a
-4090-class card); querying runs fine CPU-only with the reranker optional.
+`requirements.txt`. GPU recommended for bulk indexing; querying runs fine CPU-only with the reranker optional.
 
 ## Docs
 
