@@ -1,335 +1,140 @@
-# bib_rag
+# bib_rag — Stop AI from inventing your citations
 
-Academic bibliography RAG toolkit for evidence-based writing. One toolkit,
-many libraries:
+**An evidence-gated RAG toolkit for academic writing.** Every sentence your AI
+drafts must trace back to a paper that is actually *in your library* —
+retrieved by you, chunk-verified, and citation-checked before it reaches the
+page.
 
-- **this repo** — the toolkit (code only: `src/`, `scripts/`, `docs/`)
-- **libraries** — one self-describing data folder per domain, each with its own
-  ChromaDB (`chroma_db_new/`), full-text store (`parent_store/`), checkpoints
-  (`data/`), tags (`outputs/`), and a `LIBRARY.md` manifest. Create yours with
-  `scripts/setup_library.py`; the toolkit serves any of them via
-  `BIB_RAG_KB_NAME` (or the per-library command it generates).
+Built and battle-tested in daily empirical-research writing (molecular
+biology + genomics): multi-omics papers, review sections, grant-style claims.
+Not a demo RAG — the honesty machinery (claim ledger, citation guard,
+permutation-grade evidence gates) exists because LLM-written bibliographies
+fail quietly unless you force them not to.
 
-> **New here?** Read [`GUIDE.md`](GUIDE.md). The maintained how-to procedures
-> live in the Hermes skills `bib-rag-ingest` and `bib-rag-query`. Historical
-> docs: `docs/archive/`.
+<!-- TODO(shot): 15s terminal GIF — `bibrag query --cite "claim" → sources + writer output` -->
 
----
+## The problem it solves
 
-## Quick Start
+Generic LLM + RAG pipelines fail three ways on academic text:
+
+1. **Hallucinated citations** — plausible authors/years/DOIs that don't exist
+2. **Right paper, wrong claim** — the source is real but says something weaker
+   than the sentence citing it
+3. **Context amnesia** — after compaction, the model "forgets" which evidence
+   it already pulled and re-derives from memory instead
+
+bib_rag attacks all three at the pipeline level, not the prompt level:
+
+| Layer | Mechanism | LLM cost |
+|---|---|---|
+| Retrieval | Hybrid dense + FTS5-BM25 with RRF fusion, reranker service, hierarchical child→parent chunk expansion | zero |
+| Generation | Locked "no answer → say so" source-integrity rules; structured output schemas; claim-level confidence (`claim_ledger`) | — |
+| Output | **`citation_guard`** — every cited source must be in the retrieval whitelist *and* lexically support the claim; violations are dropped or downgraded | zero |
+| Verification | `evidence_gate` — insufficient-evidence audits + explicit gap reporting; refuse-before-LLM short-circuit when retrieval returns nothing | zero |
+| Metadata | `meta_audit` — author/volume/DOI cross-checked against Zotero + Crossref/PubMed/OpenAlex before a citation is emitted | zero |
+| Regression | `evaluate.py` — retrieval + citation-faithfulness harness over gold claims, so config changes get graded, not vibes-reviewed | — |
+
+## Quick start
 
 ```bash
-# 0. Get the toolkit (if you haven't cloned it yet)
 git clone https://github.com/shaorray/bib_rag.git && cd bib_rag
+python3.10 -m pip install -e . --user        # provides the `bibrag` command
+```
 
-# 0b. Optional (recommended): install as an editable package
-#     → gives you the `bibrag` console command from any directory.
-/usr/bin/python3.10 -m pip install -e . --user
-bibrag config                      # verify: prints active library
-bibrag query "some phrase" --top 3 # works without any wrapper
-#     The repo still works un-installed (loose-script mode) — installing
-#     changes nothing for existing eph-rag/geo-rag workflows.
+You need two [llama-server](https://github.com/ggml-org/llama.cpp) style
+services (any OpenAI-compatible endpoint works):
 
-# 0c. Prerequisites
-#    a) Python dependencies (Python 3.10; see requirements.txt for details):
-pip install -r requirements.txt
-#    b) an OpenAI-compatible embedding server (bge-m3 recommended) — REQUIRED
-#       for indexing and querying; this toolkit expects it on port 8081
-#       (see "Server Setup" below).
-curl http://localhost:8081/health          # → {"status":"ok"}
+```bash
+# embeddings — REQUIRED (bge-m3 recommended; -ub 2048 matters, see docs)
+llama-server -m bge-m3.gguf --port 8081 -c 8192 -ngl 999 --embedding -ub 2048
+# LLM — required only for agentic Q&A / classification / writer-synthesis
+llama-server -m your-model.gguf --port 5015 -c 524288 -ngl 999
+```
 
-# 1. Create a library (one command: folders + manifest + registry + wrapper)
-/usr/bin/python3.10 -B scripts/setup_library.py --name <name>_rag \
+Create a library and index your papers:
+
+```bash
+python3.10 -B scripts/setup_library.py --name mybib_rag \
     --domain "your domain" --wrapper yes --no-interactive
 
-# 2. Index a paper
-<name>-rag src/index_single_paper.py /path/to/paper.md
+python3.10 -B add_papers.py /path/to/pdfs/   # PDF → md → chunked → embedded
 
-# 3. Query it
-<name>-rag src/query_bib_rag.py "distinctive phrase from the paper"
-
-# 4. Batch-add PDFs (extracts PDF→md, then indexes incrementally)
-<name>-rag add_papers.py /path/to/pdf/dir/
-
-# 5. Delete a paper (dry-run by default)
-<name>-rag scripts/remove_paper.py paper_stem.md --apply
-
-# 6. Agentic Q&A over the library
-<name>-rag agentic_query.py "What do my papers say about X?"
+bibrag config                                # sanity check
 ```
 
-`<name>-rag` is the per-library command the setup script generates (it pins
-the library and sets up the Python environment).
+## Everyday usage
 
-> **Python**: always `/usr/bin/python3.10 -B` — the wrappers set this plus the
-> `PYTHONPATH` fix chromadb needs. Bare `python3` is a pyenv shim without deps.
-
-## Building a RAG library
+**Find support for a claim (the core "cite" loop):**
 
 ```bash
-# Interactive — prompts for name/domain with defaults:
-/usr/bin/python3.10 -B scripts/setup_library.py
-
-# Scripted:
-/usr/bin/python3.10 -B scripts/setup_library.py \
-    --name <name>_rag \
-    --domain "your domain" \
-    --wrapper yes --no-interactive
+bibrag query --cite "the specific claim you are about to write" --top 3
 ```
 
-This creates the library folder (`chroma_db_new/`, `parent_store/`, `data/`,
-`outputs/`, `md/`), writes `LIBRARY.md` + `CONTEXT.md`, registers it in
-`src/kb_config.py`, and emits the `<name>-rag` command. Library names are
-`snake_case` ending in `_rag`; the Chroma collection defaults to `<stem>_papers`.
-
-Switch libraries any time — each wrapper pins its own library, or use
-`BIB_RAG_KB_NAME=<other>_rag <command>` per-call (never `export BIB_RAG_ROOT` — it
-leaks across calls and silently writes into the wrong library).
-
-## Indexing papers
+**Write a paragraph with live citations:**
 
 ```bash
-# Single paper (chunks parent+child, embeds via 8081, stores into the active library)
-<name>-rag src/index_single_paper.py /path/to/paper.md
-
-# First-time bulk build / rebuild (GPU build — incremental via checkpoint)
-<name>-rag src/build_hierarchical_gpu.py --papers-dir /path/to/md/ --batch-size 50
-
-# Batch verification after indexing: check coverage
-<name>-rag src/query_bib_rag.py "<distinctive phrase>" --top 3
+bibrag src/bib_rag_writer.py "topic sentence" --top 5 --style APA
 ```
+Writer pipeline: scope-grill → retrieve → synthesize → citation-guard →
+metadata-proofread → markdown with verified APA/Vancouver citations.
 
-## Adding papers
+**Agentic Q&A over the whole library** (LangGraph; follow-ups keep context):
 
 ```bash
-# PDFs → markdown → index (incremental; skips already-indexed papers)
-<name>-rag add_papers.py /path/to/new/pdfs/
-<name>-rag add_papers.py /path/to/md/ --skip-extract   # already markdown
-<name>-rag add_papers.py /path/to/pdfs/ --batch-size 5 # smaller batches
-
-# Verify a specific paper landed:
-<name>-rag src/query_bib_rag.py "<phrase unique to the new paper>" --top 3
+bibrag agentic "What do my papers say about X?"
 ```
 
-Downloads land in the library's `md/` by default; keep PDFs durably (never /tmp).
-
-## Deleting papers
+**Metadata repair for a messy library** (Zotero snapshot → live Zotero →
+Crossref/PubMed/OpenAlex fallback chain, per-paper audit ledger):
 
 ```bash
-# Dry-run (default) — shows exactly what matches, deletes nothing:
-<name>-rag scripts/remove_paper.py <paper>.md
-
-# By filename substring:
-<name>-rag scripts/remove_paper.py --match <author>
-
-# Actually delete (chroma chunks + parent_store JSON + checkpoint/metadata entries):
-<name>-rag scripts/remove_paper.py <paper>.md --apply
+bibrag scripts/metadata/backfill_all.py --bib "My Library.bib" --apply
 ```
 
-Deletion removes the paper completely — re-index the same md any time to bring
-it back cleanly. To wipe a whole library, just delete its folder (and its
-registry line in `src/kb_config.py`).
+**Delete/rebuild are safe by default** — deletion dry-runs first; re-indexing
+the same markdown restores it cleanly.
 
----
+## Design notes
 
-## Agentic RAG
+- **Toolkit vs library**: code lives here; your papers, vectors, and stores
+  live in self-describing library folders (`LIBRARY.md` manifest, one ChromaDB
+  per domain). One command scaffolds a new library; switching is an env var —
+  never a fragile global root.
+- **Chunking respects scientific tables/figures**: captions become atomic
+  parent chunks with `chunk_type` tags, so citation checks can quote the
+  exact panel a claim rests on.
+- **Snowballing built in**: `reference_graph` supports forward/backward
+  citation walking — useful when the seed paper's method section is the
+  actual question.
+- **PageIndex / vectorless mode**: tree-index retrieval is vendored as an
+  alternative to embeddings for small, structured corpora.
+- **Fully local option**: bge-m3 + any llama.cpp GGUF = zero cloud, zero
+  cost, private library. Cloud gateway works identically.
 
-Full LangGraph-powered agentic pipeline with hierarchical retrieval, context compression, and conversation memory.
+## Requirements
 
-### Quick Start — Agentic Query
+Python ≥ 3.10 · ChromaDB 1.4.1 · LangGraph/LangChain ≥ 0.3 · pymupdf4llm
+(embedding service ≥ 8081; LLM endpoint for agentic/writer paths). Full list:
+`requirements.txt`. GPU recommended for bulk indexing (~1–2s/paper on a
+4090-class card); querying runs fine CPU-only with the reranker optional.
 
-```bash
-cd bib_rag
+## Docs
 
-# Single query (default: fast cloud model)
-/usr/bin/python3.10 -B agentic_query.py "What is the role of retinoic acid in neural development?"
+- [`GUIDE.md`](GUIDE.md) — new-user walkthrough (library setup → first query)
+- [`docs/hallucination_governance_checklist.md`](docs/hallucination_governance_checklist.md)
+  — the three-layer honesty audit (input/generation/output) with current
+  per-item status — kept honest, including the ⚠️/❌ rows
+- [`docs/GUARD_HYBRID.md`](docs/GUARD_HYBRID.md) — citation-guard & hybrid
+  retrieval internals, borrowed-mechanism attribution
+- [`scripts/metadata/README.md`](scripts/metadata/README.md) — metadata
+  fixation pipeline
 
-# Interactive chat mode
-/usr/bin/python3.10 -B agentic_query.py --interactive
+## Status
 
-# Verbose mode (shows pipeline progress)
-/usr/bin/python3.10 -B agentic_query.py "Compare E-cadherin and N-cadherin functions" --verbose
-```
-
-> **Note**: use `/usr/bin/python3.10` (the interpreter with langchain deps
-> installed), not bare `python3`.
-
-**Model choice**: agentic mode runs on a cloud model by default, but you can
-point it at a local model instead — set `LLM_URL` / `LLM_MODEL` to your
-llama-server endpoint and a `.gguf` path for a fully offline, private run.
-See `agentic_query.py --help` for the backend options.
-
-**Prerequisites**: Embedding server must be running.
-- Embeddings: bge-m3 on port 8081
-- LLM: a cloud gateway (port 11434) **or** a local model (port 5015)
-
-### Architecture
-
-```
-User Query
-  ↓
-summarize_history → rewrite_query → [clarification?]
-  ↓
-Agent Subgraphs (parallel for multi-part queries)
-  orchestrator → search_child_chunks → retrieve_parent_chunks → [compress?]
-  ↓
-aggregate_answers → Final Answer with Sources
-```
-
-**Key features:**
-- **Hierarchical retrieval**: Search small child chunks → retrieve full parent context
-- **Context compression**: LLM summarizes retrieved data when token threshold exceeded
-- **Map-Reduce**: Multi-part queries split into parallel agents
-- **Conversation memory**: Follow-up queries resolved from prior context
-- **Source attribution**: Every answer cites specific papers
-
----
-
-## Classic RAG Tools (Still Available)
-
-### Quick Search
-```bash
-/usr/bin/python3.10 -B src/query_bib_rag.py "your keywords"
-```
-
-### Find Citations
-```bash
-/usr/bin/python3.10 -B src/query_bib_rag.py --cite "a claim to find supporting papers for" --top 3
-```
-
-### Write Paragraph with Citations
-```bash
-/usr/bin/python3.10 -B src/bib_rag_writer.py "your topic sentence" \
-  --top 5 --style APA --output /path/to/output.odt
-```
-
----
-
-## Zotero Access (MCP)
-
-bib_rag reaches your Zotero library through the **Zotero MCP server**
-([54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp),
-`zotero-mcp-server` on PyPI):
-
-```bash
-uv tool install zotero-mcp-server        # provides `zotero-mcp` + `zotero-cli`
-```
-
-Zotero desktop must be running with the local API enabled
-(Settings → Advanced → *Allow other applications on this computer to
-communicate with Zotero*). No API key is needed for local read access.
-
-The access layer (`scripts/zotero_access.py`) tries, in order:
-
-1. **Zotero MCP server** — `zotero-mcp serve --transport stdio`, queried over
-   MCP (`zotero_search_items`, `zotero_get_item_metadata` with `format=json`)
-2. **Zotero local HTTP API** (`http://localhost:23119`) — dependency-free fallback
-3. Graceful `None`/`[]` when Zotero is unreachable — consumers never crash
-
-Used by:
-
-- `scripts/meta_audit.py` — Zotero as one of the corroboration sources for
-  metadata proof-reading
-- `src/bib_rag_writer.py` / `src/bib_rag_writer_debate.py` — real author /
-  volume / issue / pages / DOI for APA & Vancouver citations
-
-Env knobs: `BIB_RAG_ZOTERO_MCP=0` forces the HTTP path;
-`BIB_RAG_ZOTERO_URL=...` overrides the local HTTP API base.
-
----
-
-## File Structure
-
-```
-bib_rag/                      ← toolkit (code only; DATA lives in sibling library folders)
-├── GUIDE.md                    ← NEW-USER START: library setup + usage walkthrough
-├── add_papers.py               ← Add new PDFs to the active library's index (entry point)
-├── agentic_query.py            ← Query the agentic RAG system (entry point)
-├── scripts/setup_library.py    ← Scaffold + register a new library (one command)
-│
-├── scripts/                    ← Utilities & pipelines
-│   ├── metadata/               ← METADATA FIXATION PIPELINE (see metadata/README.md):
-│   │     bind_zotero (BibTeX→doi+key) · backfill_metadata · meta_audit (Crossref/PubMed/OpenAlex)
-│   │     apply_tags · migrate_topics ← classification tags; sources: BibTeX snapshot > live Zotero > registries
-│   ├── classify_papers.py      ← LLM tagging (article_type + open-vocab topics, 3 input modes)
-│   ├── bib_utils.py            ← Shared normalization / .bib / filename helpers
-│   ├── zotero_access.py        ← Zotero access layer (MCP first, HTTP fallback)
-│   ├── remove_paper.py · setup_library.py ← library lifecycle
-│   └── archive_project_specific/ ← superseded one-off corpus scripts (provenance only)
-│
-├── src/                        ← RAG library & query/writer tools
-│   ├── kb_config.py            ← SINGLE PATH-RESOLUTION POINT: registry + BIB_RAG_* env
-│   ├── agentic_graph.py · agent_nodes.py · agent_edges.py ← LangGraph pipeline
-│   ├── agent_prompts.py · agent_schemas.py · agent_tools.py ← prompts / state / retrieval tools
-│   ├── build_hierarchical_gpu.py · index_single_paper.py · chunking.py ← index build
-│   ├── query_bib_rag.py        ← Quick semantic search & citations
-│   ├── bib_rag_writer.py       ← PARAGRAPH COMPOSER: grill→retrieve→synthesize (backends:
-│   │     default LLM · --no-llm template · --debate relational; markdown + citations;
-│   │     dependency policy: retrieval-metadata citations, no odfpy/zotero_access)
-│   ├── parent_store_manager.py ← Parent chunk loader
-│   └── evaluate.py                       ← eval harness (tests live in tests/)
-├── tests/                     ← ALL regression suites (moved 2026-08-31 from src/+scripts/:
-│     unit (bib_utils/meta_audit/doctor/guard) + LLM-integration (comprehensive/agentic)
-│
-├── docs/                       ← README.md (index) + archive/ (historical 2026-03→06, obsolete systems)
-│
-└── .gitignore                  ← library folders / data dirs never enter this repo
-```
-
-**Library folder layout** (created by `scripts/setup_library.py`):
-`chroma_db_new/` (vectors) · `parent_store/` + `parent_store_disabled/` (full-text
-JSON) · `data/` (checkpoints) · `outputs/` (tag CSVs) · `CONTEXT.md` (domain
-glossary) · `LIBRARY.md` (manifest) · optional `scripts/` (domain-owned batch tools).
-
----
-
-## Server Setup
-
-The toolkit talks to two local services over OpenAI-compatible HTTP APIs.
-Start them with your own `llama-server` build (or any compatible server);
-the exact binary path, model path and GPU flags depend on your machine.
-
-**Embedding server (required)** — an embedding model such as `bge-m3`,
-with embedding mode enabled. The `-ub 2048` physical-batch flag matters:
-the default of 512 rejects any chunk over 512 tokens (see Troubleshooting).
-
-```bash
-llama-server -m /path/to/bge-m3.gguf \
-  --port 8081 -c 8192 -ngl 999 --embedding -ub 2048 &
-curl http://localhost:8081/health   # → {"status":"ok"}
-```
-
-**LLM (required only for agentic Q&A and classification)** — either a
-cloud gateway (e.g. Ollama's OpenAI-compatible endpoint) or a local GGUF:
-
-```bash
-# local model:
-llama-server -m /path/to/model.gguf --port 5015 -c 524288 -ngl 999 \
-  --flash-attn on -np 2 --cache-type-k q8_0 --cache-type-v q8_0 &
-curl http://localhost:5015/health
-```
-
-Point the toolkit at whichever backend you chose with `LLM_URL` / `LLM_MODEL`
-(see the Agentic RAG section). Default ports the toolkit expects:
-embeddings **8081**, LLM **11434** (cloud) or **5015** (local).
-
----
-
-## Testing
-
-```bash
-# Comprehensive test suite (5 queries, ~5 minutes)
-cd bib_rag
-/usr/bin/python3.10 -B tests/test_comprehensive.py
-
-# Single test query
-/usr/bin/python3.10 -B tests/test_agentic_graph.py
-
-# Evaluation: agentic vs baseline
-/usr/bin/python3.10 -B src/evaluate.py
-```
-
----
+v0.9.0 — single-maintainer, used daily in real manuscript preparation.
+APIs may still move; the honest bits (citation guard, claim ledger) are the
+stable core. Issues and PRs welcome — especially reproducible failure cases
+where the guard let something hallucinated through.
 
 ## License
 
